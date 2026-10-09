@@ -1,5 +1,7 @@
 # Egyptian Tour Guide — Agentic RAG Chatbot
 
+[![CI](https://github.com/mahmoudhaytham25/egyptian-tour-guide-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/mahmoudhaytham25/egyptian-tour-guide-rag/actions/workflows/ci.yml)
+
 A full-stack agentic chatbot for Egyptian tourism. It answers questions grounded in uploaded Egyptian history documents via a Retrieval-Augmented Generation (RAG) pipeline, holds natural multi-turn conversations, and can plan trip schedules (e.g. "a Thursday itinerary in Luxor").
 
 ## Features
