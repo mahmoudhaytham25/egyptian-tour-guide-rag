@@ -35,7 +35,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Create data directory if it doesn't exist
 const fs = require('fs');
-const dataDir = path.join(__dirname, '../data');
+const dataDir = path.join(__dirname, '../model-server/data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }

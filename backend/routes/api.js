@@ -8,7 +8,7 @@ const path = require('path');
 const storage = multer.diskStorage({
   destination: function(req, file, cb) {
     console.log("Processing upload - destination");
-    cb(null, path.join(__dirname, '../../data/'));
+    cb(null, path.join(__dirname, '../../model-server/data/'));
   },
   filename: function(req, file, cb) {
     console.log("Processing upload - filename:", file.originalname);

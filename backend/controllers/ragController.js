@@ -33,7 +33,7 @@ exports.uploadPdf = (req, res) => {
     // Check if there's existing metadata for this file and remove it
     // to ensure it shows up as unindexed
     const baseFileName = req.file.filename.replace('.pdf', '');
-    const metadataPath = path.join(__dirname, '../../vector_store', `${baseFileName}_metadata.json`);
+    const metadataPath = path.join(__dirname, '../../model-server/vector_store', `${baseFileName}_metadata.json`);
     
     if (fs.existsSync(metadataPath)) {
       try {
@@ -79,7 +79,7 @@ exports.indexDocument = (req, res) => {
       });
     }
     
-    const pdfPath = path.join(__dirname, '../../data', filename);
+    const pdfPath = path.join(__dirname, '../../model-server/data', filename);
     
     if (!fs.existsSync(pdfPath)) {
       return res.status(404).json({ 
@@ -102,7 +102,7 @@ exports.indexDocument = (req, res) => {
 
     // Run the Python indexer script
     const pythonProcess = spawn('python', [
-      path.join(__dirname, '../../rag/indexer.py'),
+      path.join(__dirname, '../../model-server/rag/indexer.py'),
       pdfPath
     ]);
 
@@ -370,8 +370,8 @@ exports.getStatus = (req, res) => {
 
 exports.getDocuments = (req, res) => {
   try {
-    const dataDir = path.join(__dirname, '../../data');
-    const vectorStoreDir = path.join(__dirname, '../../vector_store');
+    const dataDir = path.join(__dirname, '../../model-server/data');
+    const vectorStoreDir = path.join(__dirname, '../../model-server/vector_store');
     
     // Ensure data directory exists
     if (!fs.existsSync(dataDir)) {

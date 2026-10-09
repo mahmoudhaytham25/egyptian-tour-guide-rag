@@ -14,22 +14,23 @@ A full-stack agentic chatbot for Egyptian tourism. It answers questions grounded
 
 | Home | Chat |
 |---|---|
-| ![Homepage](Frontend/Home_EgyptianHistory.png) | ![Chat Interface](Frontend/Chat_EgyptianHistory.png) |
+| ![Homepage](screenshots/home.png) | ![Chat Interface](screenshots/chat.png) |
 
 ## Architecture
 
 ```
-React Frontend  →  Node.js/Express API  →  Flask Model Server
- (port 3000)        (port 5000)             (port 5050)
-                        │                      ├─ Gemini 2.0 Flash (LLM)
-                   MongoDB (users,             └─ Sentence Transformers (embeddings)
-                   conversations)                        │
-                                              Custom .npz vector store ← indexed PDFs
-```
+frontend/          React SPA (port 3000) — chat UI, document management, auth
+     │
+backend/           Express API (port 5000) — JWT auth, conversations, RAG endpoints
+     │                              └─ spawns the indexer for document ingestion
+model-server/      Flask model services (port 5050) + RAG pipeline
+                   ├─ rag/          classifier, indexer, retriever, generator
+                   ├─ models/       Gemini 2.0 Flash LLM + sentence-transformer embeddings
+                   ├─ data/         uploaded PDFs (incl. bundled egyptian_history.pdf)
+                   └─ times_places/ monument dataset for trip scheduling
 
-- **`Frontend/`** — React app (CoreUI, styled-components): chat interface, document upload/management, auth pages
-- **`Backend/backend/`** — Express API: JWT auth, conversation/message CRUD, RAG endpoints (`/api/upload`, `/api/index`, `/api/query`)
-- **`Backend/` (Python)** — `model_server.py` Flask services for LLM + embeddings; `rag/` package with classifier, indexer, retriever, generator; `models/` wrappers
+MongoDB            users, conversations, chat history
+```
 
 ## Stack
 
@@ -37,12 +38,13 @@ Python (Flask, Sentence Transformers, PyMuPDF) · Node.js (Express) · React · 
 
 ## Getting Started
 
-Each component has its own detailed README:
+1. **Model server** — `cd model-server && pip install -r requirements.txt && python model_server.py` (port 5050)
+2. **API** — `cd backend && npm install && npm start` (port 5000)
+3. **Frontend** — `cd frontend && npm install && npm start` (port 3000)
 
-- **Backend (RAG pipeline + API):** [`Backend/README.md`](Backend/README.md) — Python/Node setup, MongoDB, env vars, full API reference
-- **Frontend:** [`Frontend/README.md`](Frontend/README.md) — React app setup
+Requires MongoDB running locally and a `.env` in `model-server/` (see the detailed guide).
 
-Short version: start MongoDB → `python model_server.py` (port 5050) → `npm start` in `Backend/` (port 5000) → `npm start` in `Frontend/` (port 3000).
+**Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 
 ## License
 

@@ -53,19 +53,21 @@ The diagram shows:
 1. **Clone the repository**
 
     ```
-    git clone https://github.com/OmarOssama25/RAG_Backend_EgyptianHistory.git
-    cd RAG_Backend_EgyptianHistory
+    git clone https://github.com/mahmoudhaytham25/egyptian-tour-guide-rag.git
+    cd egyptian-tour-guide-rag
     ```
 
 2. **Install Python dependencies**
 
     ```
+    cd model-server
     pip install -r requirements.txt
     ```
 
 3. **Install Node.js dependencies**
 
     ```
+    cd backend
     npm install
     ```
 
@@ -105,7 +107,7 @@ The diagram shows:
 
 7. **Set up environment variables**
 
-    Create a `.env` file in the `backend/` directory (or root, if your setup expects it there):
+    Create a `.env` file in the `model-server/` directory (the Node API reads the same values via `dotenv` in `backend/`):
 
     ```
     GOOGLE_API_KEY=your_gemini_api_key
@@ -134,6 +136,7 @@ The diagram shows:
 
 1. **First Terminal**:
 ```
+cd model-server
 python model_server.py
 ```
 This will start:
@@ -144,6 +147,7 @@ This will start:
 
 2. **Second Terminal**:
 ```
+cd backend
 npm start
 ```
 
@@ -456,8 +460,8 @@ Modify `config.json` to adjust system behavior:
 
 ## Project Structure
 ```
-RAG_Backend_EgyptianHistory/
-├── backend/
+egyptian-tour-guide-rag/
+├── backend/                           # Express API (Node.js)
 │   ├── config/
 │   │   └── database.js                # MongoDB connection setup
 │   ├── controllers/
@@ -477,48 +481,32 @@ RAG_Backend_EgyptianHistory/
 │   ├── services/
 │   │   └── emailService.js            # Email utility (Ethereal/dev or real SMTP)
 │   ├── server.js                      # Main Express app entry point
-│   └── .env                           # Environment variables (not committed)
+│   └── package.json                   # Node.js dependencies & scripts
 │
-├── data/                              # Uploaded PDF storage
-├── vector_store/                      # Saved vector embeddings
-├── model_server.py                    # Flask app for Gemini 2.0 & embeddings
-├── models/
-│   ├── embedding.py                   # Embedding model wrapper
-│   └── llm.py                         # Gemini 2.0 Flash interface
-├── rag/
-│   ├── contextual_processor.py        # Adds document context to chunks
-│   ├── classifier.py                  # Prompt type classification
-│   ├── indexer.py                     # PDF chunking/indexing
-│   ├── retriever.py                   # Semantic search
-│   └── generator.py                   # Response generation
-├── requirements.txt                   # Python dependencies
-├── package.json                       # Node.js dependencies & scripts
-├── README.md                          # Project documentation
-└── .gitignore                         # Files/folders to ignore in git
+├── model-server/                      # Python model services + RAG pipeline
+│   ├── model_server.py                # Flask app for Gemini 2.0 & embeddings
+│   ├── models/
+│   │   ├── embedding.py               # Embedding model wrapper
+│   │   ├── llm.py                     # Gemini 2.0 Flash interface
+│   │   └── reranker.py                # Result reranking
+│   ├── rag/
+│   │   ├── classifier.py              # Prompt type classification
+│   │   ├── indexer.py                 # PDF chunking/indexing
+│   │   ├── retriever.py               # Semantic search
+│   │   ├── generator.py               # Response generation
+│   │   └── utils/                     # Path/env/file helpers
+│   ├── data/                          # Uploaded PDF storage
+│   ├── times_places/                  # Monument dataset (trip scheduling)
+│   ├── vector_store/                  # Saved vector embeddings (gitignored)
+│   └── requirements.txt               # Python dependencies
+│
+├── frontend/                          # React SPA
+├── screenshots/
+└── docs/                              # This file
 ```
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details.
-
-Citations:
-[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/29393552/9384ba24-2c67-4c12-ba5f-3d6a94424585/Egyptian-History-RAG-API.postman_collection.json
-[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/29393552/393138e2-85cf-4a73-9fea-a4a06c1b54c1/README.md
-[3] https://blog.postman.com/automate-your-api-testing-by-scheduling-your-collection-runs-on-postman/
-[4] https://learning.postman.com/docs/tests-and-scripts/run-tests/run-tests-on-schedule/
-[5] https://learning.postman.com/docs/collections/running-collections/scheduling-collection-runs/
-[6] https://www.packtpub.com/en-BE/learning/author-posts
-[7] https://github.com/andrew/ultimate-awesome
-[8] https://www.packtpub.com/fr-ro/learning/how-to-tutorials/tag/chatgpt
-[9] https://stackoverflow.com/questions/77152865/how-to-provide-context-from-a-list-of-documents-in-openais-chat-completions-api
-[10] https://stackoverflow.com/questions/77217945/how-to-pass-context-along-with-chat-history-and-question-in-template-in-langchai
-[11] https://community.openai.com/t/how-to-pass-conversation-history-back-to-the-api/697083
-[12] https://www.freelancer.com/freelancers/egypt/php
-
----
-Answer from Perplexity: pplx.ai/share
-## License
-
-MIT License - See [LICENSE](LICENSE) for details.
+MIT License - See [LICENSE](../LICENSE) for details.
 
 
