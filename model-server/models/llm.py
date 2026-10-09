@@ -27,27 +27,6 @@ class LLMModel:
         self.model_loaded = False
         self.api_key = None
         
-    def download_model(self):
-        """
-        Download necessary packages for Gemini API.
-        """
-        try:
-            logger.info(f"Installing required packages for Gemini API...")
-            
-            # Install required packages
-            try:
-                import pip
-                pip.main(['install', 'google-generativeai'])
-                logger.info("Required packages installed successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error installing packages: {str(e)}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error in setup process: {str(e)}")
-            return False
-    
     def load_model(self):
         """
         Load the model for inference.
@@ -74,14 +53,8 @@ class LLMModel:
             if not self.api_key:
                 logger.error("GEMINI_API_KEY not available. Please set it in your environment or .env file")
                 return False           
-            # First make sure required packages are installed
-            try:
-                import google.generativeai as genai
-            except ImportError:
-                logger.info("Required packages not found. Installing...")
-                if not self.download_model():
-                    return False
-                import google.generativeai as genai
+            # google-generativeai must be installed (see requirements.txt)
+            import google.generativeai as genai
             
             logger.info(f"Initializing Gemini API with model: {self.model_name}")
             

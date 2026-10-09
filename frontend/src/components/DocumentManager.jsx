@@ -24,46 +24,65 @@ const DocumentManager = () => {
     }
   }, []);
 
+  // Start polling for indexing status (the effect below owns the interval)
   const pollIndexingStatus = useCallback(() => {
-    if (pollingActive) return;
-    
     setPollingActive(true);
+  }, []);
+
+  // Poll indexing status while polling is active.
+  // The interval is created inside useEffect so its cleanup runs on unmount
+  // and whenever polling stops — no leaked intervals.
+  useEffect(() => {
+    if (!pollingActive) return;
+
     console.log("Starting indexing status polling");
-    
+
     const interval = setInterval(async () => {
       try {
         // Get indexing status from API
         const response = await api.getIndexingStatus();
         const status = response.status;
         console.log("Polling status:", status);
-        
+
+        if (!status) {
+          setStatusMessage('Error checking indexing status');
+          setPollingActive(false);
+          return;
+        }
+
+        if (status.error) {
+          // Indexing failed — stop polling instead of polling forever
+          setStatusMessage(`Indexing failed: ${status.error}`);
+          await fetchDocuments();
+          setPollingActive(false);
+          return;
+        }
+
         if (status.isIndexing) {
           setStatusMessage(`Indexing in progress: ${status.progress}%`);
         } else if (status.lastIndexed) {
           // Indexing is complete, refresh document list
           await fetchDocuments();
           setStatusMessage(`Indexing completed at ${new Date(status.lastIndexed).toLocaleTimeString()}`);
-          
-          // Clear polling after a delay to let user see completion message
+
+          // Stop polling after a delay to let user see completion message
           setTimeout(() => {
-            clearInterval(interval);
             setPollingActive(false);
             setStatusMessage('');
           }, 3000);
+        } else {
+          // Not indexing and nothing indexed — nothing left to poll for
+          setPollingActive(false);
         }
       } catch (error) {
         console.error('Error polling status:', error);
         setStatusMessage('Error checking indexing status');
-        clearInterval(interval);
         setPollingActive(false);
       }
     }, 2000);
-    
-    // Clean up interval if component unmounts
-    return () => {
-      clearInterval(interval);
-      setPollingActive(false);
-    };
+
+    // Clean up interval on unmount or when polling stops
+    return () => clearInterval(interval);
   }, [pollingActive, fetchDocuments]);
 
   useEffect(() => {

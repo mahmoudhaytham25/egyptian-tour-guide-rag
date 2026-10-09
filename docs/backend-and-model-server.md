@@ -107,18 +107,26 @@ The diagram shows:
 
 7. **Set up environment variables**
 
-    Create a `.env` file in the `model-server/` directory (the Node API reads the same values via `dotenv` in `backend/`):
+    The project uses **two separate `.env` files** — one per directory. Example files are provided: `backend/.env.example` and `model-server/.env.example`. Copy each one to `.env` in the same directory and fill in your values.
+
+    Create `backend/.env` (consumed by `dotenv` in `backend/server.js`):
 
     ```
-    GOOGLE_API_KEY=your_gemini_api_key
-    FLASK_PORT=5050
-    NODE_PORT=5000
+    PORT=3001
     MONGODB_URI=mongodb://localhost:27017/egyptian_history_rag
     JWT_SECRET=your_random_secure_jwt_secret
+    MODEL_SERVER_URL=http://localhost:5050
     EMAIL_SERVICE=smtp.ethereal.email
     EMAIL_USER=your_email@example.com
     EMAIL_PASSWORD=your_email_password
     EMAIL_FROM=no-reply@egyptianhistory.com
+    ```
+
+    Create `model-server/.env` (consumed by `python-dotenv` via `rag/utils/env_loader.py`):
+
+    ```
+    GEMINI_API_KEY=your_gemini_api_key
+    PORT=5050
     ```
 
 8. **Verify MongoDB Connection**
@@ -175,6 +183,8 @@ The main API will be available at `http://localhost:5000`
 
 ### RAG System API
 
+All endpoints below except `/api/health` require `Authorization: Bearer <token>`.
+
 | Endpoint | Method | Description | Request Body |
 |----------|--------|-------------|-------------|
 | `/api/upload` | POST | Upload a PDF document | Form data with `pdf` file |
@@ -227,17 +237,17 @@ curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com
 
 1. **Upload your Egyptian history PDF**:
 ```
-curl -X POST -F "pdf=@path/to/document.pdf" http://localhost:5000/api/upload
+curl -X POST -H "Authorization: Bearer YOUR_TOKEN" -F "pdf=@path/to/document.pdf" http://localhost:5000/api/upload
 ```
 
 2. **Index the document**:
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"filename": "egyptian_history.pdf"}' http://localhost:5000/api/index
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"filename": "egyptian_history.pdf"}' http://localhost:5000/api/index
 ```
 
 3. **Query the system**:
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"query":"Who built the Great Pyramid of Giza?"}' http://localhost:5000/api/query
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"query":"Who built the Great Pyramid of Giza?"}' http://localhost:5000/api/query
 ```
 
 ### Chat System Usage
@@ -447,7 +457,7 @@ Modify `config.json` to adjust system behavior:
    - Increase `embedding_batch_size`
 
 3. **Port Conflicts**:
-   - Change ports in `.env` file if 5050/5000 are occupied
+   - Change `PORT` in `model-server/.env` (Flask, default 5050) or `backend/.env` (Express, default 3001) if occupied. If you change the Flask port, update `MODEL_SERVER_URL` in `backend/.env` to match.
 
 4. **CUDA Out of Memory**:
    - Restart the Flask service to clear memory

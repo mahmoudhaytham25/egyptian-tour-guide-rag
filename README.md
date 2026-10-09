@@ -42,7 +42,7 @@ Python (Flask, Sentence Transformers, PyMuPDF) · Node.js (Express) · React · 
 2. **API** — `cd backend && npm install && npm start` (port 5000)
 3. **Frontend** — `cd frontend && npm install && npm start` (port 3000)
 
-Requires MongoDB running locally and a `.env` in `model-server/` (see the detailed guide).
+Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide.
 
 **Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 

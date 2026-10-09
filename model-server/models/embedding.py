@@ -22,43 +22,12 @@ class EmbeddingModel:
         self.model_dir = os.path.join(self.model_path, model_name)
         self.model_loaded = False
         
-    def download_model(self):
-        """
-        Download the embedding model.
-        """
-        try:
-            # Create directory if it doesn't exist
-            os.makedirs(self.model_path, exist_ok=True)
-            
-            logger.info(f"Installing sentence-transformers package...")
-            
-            # Install required dependencies
-            try:
-                import pip
-                pip.main(['install', 'sentence-transformers'])
-                logger.info("sentence-transformers installed successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error installing sentence-transformers: {str(e)}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error in download process: {str(e)}")
-            return False
-    
     def load_model(self):
         """
         Load the embedding model for inference.
         """
         try:
-            # First, make sure sentence-transformers is installed
-            try:
-                import sentence_transformers
-            except ImportError:
-                logger.info("sentence-transformers not found. Installing...")
-                if not self.download_model():
-                    return False
-            
+            # sentence-transformers must be installed (see requirements.txt)
             # Import here to avoid loading dependencies unless needed
             from sentence_transformers import SentenceTransformer
             

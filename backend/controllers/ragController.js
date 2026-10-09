@@ -72,14 +72,23 @@ exports.indexDocument = (req, res) => {
     const { filename } = req.body;
     
     // Validate that filename was provided
-    if (!filename) {
+    if (!filename || typeof filename !== 'string') {
       return res.status(400).json({
         success: false,
         message: 'Filename is required'
       });
     }
     
-    const pdfPath = path.join(__dirname, '../../model-server/data', filename);
+    // Sanitize filename to prevent path traversal and ensure it's a PDF
+    const safeFilename = path.basename(filename);
+    if (safeFilename !== filename || !safeFilename.toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid filename. Only PDF files in the data directory are allowed.'
+      });
+    }
+    
+    const pdfPath = path.join(__dirname, '../../model-server/data', safeFilename);
     
     if (!fs.existsSync(pdfPath)) {
       return res.status(404).json({ 
@@ -101,10 +110,32 @@ exports.indexDocument = (req, res) => {
     console.log(`Starting indexing process for ${filename}`);
 
     // Run the Python indexer script
-    const pythonProcess = spawn('python', [
-      path.join(__dirname, '../../model-server/rag/indexer.py'),
-      pdfPath
-    ]);
+    const indexerScript = path.join(__dirname, '../../model-server/rag/indexer.py');
+    const pythonBin = process.env.PYTHON_BIN || 'python3';
+
+    const spawnIndexer = (command) => {
+      const pythonProcess = spawn(command, [indexerScript, pdfPath]);
+      let spawnFailed = false;
+
+      pythonProcess.on('error', (err) => {
+        spawnFailed = true;
+
+        // 'python3' missing (e.g. some Windows installs) — fall back to 'python'
+        if (err.code === 'ENOENT' && command !== 'python') {
+          console.warn(`'${command}' not found, falling back to 'python'`);
+          spawnIndexer('python');
+          return;
+        }
+
+        console.error('Failed to start indexing process:', err);
+        indexingStatus.isIndexing = false;
+        indexingStatus.error = `Failed to start Python process (${command}): ${err.message}`;
+      });
+
+      attachIndexerHandlers(pythonProcess, () => spawnFailed);
+    };
+
+    const attachIndexerHandlers = (pythonProcess, hasSpawnFailed) => {
 
     pythonProcess.stdout.on('data', (data) => {
       const output = data.toString().trim();
@@ -140,6 +171,10 @@ exports.indexDocument = (req, res) => {
     });
 
     pythonProcess.on('close', (code) => {
+      // If spawn itself failed, the 'error' handler already updated the status
+      // (or spawned the fallback interpreter) — don't overwrite it here.
+      if (hasSpawnFailed()) return;
+
       console.log(`Indexing process for ${filename} exited with code ${code}`);
       
       if (code === 0) {
@@ -169,6 +204,10 @@ exports.indexDocument = (req, res) => {
       // Mark indexing as complete regardless of outcome
       indexingStatus.isIndexing = false;
     });
+    };
+
+    // Start the indexing process (python3, falling back to python if unavailable)
+    spawnIndexer(pythonBin);
 
     res.status(202).json({ 
       success: true, 
@@ -211,6 +250,30 @@ exports.queryRag = async (req, res) => {
       });
     }
 
+    // Verify the conversation exists and belongs to the authenticated user
+    if (conversationId) {
+      let conversation;
+      try {
+        conversation = await Conversation.findById(conversationId);
+      } catch (err) {
+        conversation = null;
+      }
+
+      if (!conversation) {
+        return res.status(404).json({
+          success: false,
+          message: 'Conversation not found'
+        });
+      }
+
+      if (conversation.userId.toString() !== req.userId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have access to this conversation'
+        });
+      }
+    }
+
     let chatHistory = [];
     if (conversationId) {
       try {
@@ -235,6 +298,9 @@ exports.queryRag = async (req, res) => {
         query: queryText,
         top_k: 5,
         chat_history: chatHistory
+      }, {
+        // LLM calls can be slow — allow up to 2 minutes, but never hang forever
+        timeout: 120000
       });
 
       console.log('Model server response received');
@@ -334,10 +400,30 @@ exports.queryRag = async (req, res) => {
 
     } catch (error) {
       console.error('Error calling model server:', error.message);
-      return res.status(500).json({
+
+      // Request timed out waiting for the model server
+      if (error.code === 'ECONNABORTED' || (error.message && error.message.toLowerCase().includes('timeout'))) {
+        return res.status(504).json({
+          success: false,
+          message: 'Model server timed out while generating a response',
+          error: error.message
+        });
+      }
+
+      // Model server unreachable (connection refused, DNS failure, etc.)
+      if (!error.response) {
+        return res.status(502).json({
+          success: false,
+          message: 'Model server is unreachable',
+          error: error.message
+        });
+      }
+
+      // Model server responded with an error status
+      return res.status(502).json({
         success: false,
         message: 'Error generating response from model server',
-        error: error.message
+        error: error.response.data || error.message
       });
     }
 

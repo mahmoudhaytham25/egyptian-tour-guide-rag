@@ -109,6 +109,7 @@ if __name__ == "__main__":
     
     # Run Flask app
     port = int(os.environ.get("PORT", 5050))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # Bind to localhost only — only the Express backend needs to reach this server
+    app.run(host="127.0.0.1", port=port, debug=False)
     
     logger.info(f"Model server running on port {port}")

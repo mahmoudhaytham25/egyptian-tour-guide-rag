@@ -49,14 +49,8 @@ class PDFIndexer:
         try:
             logger.info(f"Loading PDF: {self.pdf_path}")
             
-            # Try to import PyMuPDF
-            try:
-                import fitz
-            except ImportError:
-                logger.info("Installing PyMuPDF...")
-                import pip
-                pip.main(['install', 'PyMuPDF'])
-                import fitz
+            # PyMuPDF must be installed (see requirements.txt)
+            import fitz
             
             # Open the PDF
             doc = fitz.open(self.pdf_path)

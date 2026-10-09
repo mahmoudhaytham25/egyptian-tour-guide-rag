@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const ragController = require('../controllers/ragController');
+const auth = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 
@@ -18,6 +19,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max upload size
   fileFilter: function(req, file, cb) {
     if (file.mimetype !== 'application/pdf') {
       return cb(new Error('Only PDF files are allowed!'), false);
@@ -25,6 +27,14 @@ const upload = multer({
     cb(null, true);
   }
 });
+
+// Health check endpoint (public)
+router.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', message: 'RAG API is healthy' });
+});
+
+// Apply auth middleware to all routes below
+router.use(auth);
 
 router.post('/upload', upload.single('pdf'), ragController.uploadPdf);
 
@@ -40,10 +50,5 @@ router.post('/query', ragController.queryRag);
 router.get('/status', ragController.getStatus);
 
 router.get('/documents', ragController.getDocuments);
-
-// Health check endpoint
-router.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'RAG API is healthy' });
-});
 
 module.exports = router;
