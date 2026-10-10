@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import api from "../../services/api";
 import Login from "./Login";
 
@@ -32,6 +32,8 @@ describe("Login", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    // clearAllMocks doesn't reset mockReturnValue — re-default the guard.
+    api.isAuthenticated.mockReturnValue(false);
   });
 
   it("renders the form with a link to registration", () => {
@@ -91,8 +93,38 @@ describe("Login", () => {
     await user.click(screen.getByRole("button", { name: "Login" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Network error. Please try again."
+      "Network error. Please check your connection and try again."
     );
+  });
+
+  it("shows a generic message for non-request failures", async () => {
+    const user = userEvent.setup();
+    api.login.mockRejectedValue(new Error("boom"));
+    renderLogin();
+
+    await user.type(screen.getByPlaceholderText("Email"), "user@example.com");
+    await user.type(screen.getByPlaceholderText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Login" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Login failed. Please try again."
+    );
+  });
+
+  it("redirects to /chat when the user is already authenticated", async () => {
+    api.isAuthenticated.mockReturnValue(true);
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Login />} />
+          <Route path="/chat" element={<div>Chat Page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Chat Page")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Email")).not.toBeInTheDocument();
+    expect(api.login).not.toHaveBeenCalled();
   });
 
   it("disables the button while submitting and ignores repeat submits", async () => {

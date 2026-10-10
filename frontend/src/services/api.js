@@ -31,7 +31,10 @@ const decodeTokenPayload = (token) => {
   try {
     const parts = token.split(".");
     if (parts.length < 2) return null;
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    // base64url segments may be unpadded — atob needs a multiple of 4.
+    const base64 =
+      parts[1].replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - (parts[1].length % 4)) % 4);
     return JSON.parse(atob(base64));
   } catch (e) {
     return null;
@@ -124,10 +127,6 @@ const api = {
     return payload.id || payload.userId || payload.sub || payload.user_id || null;
   },
 
-  getAuthToken: () => {
-    return localStorage.getItem(AUTH_TOKEN_KEY);
-  },
-
   // Conversation management
   getConversations: async () => {
     const response = await axiosInstance.get(`/chat/conversations`);
@@ -144,14 +143,6 @@ const api = {
     return response.data;
   },
 
-  addMessageToConversation: async (conversationId, messageData) => {
-    const response = await axiosInstance.post(
-      `/chat/conversations/${conversationId}/messages`,
-      messageData
-    );
-    return response.data;
-  },
-
   // Delete a conversation (backend performs a soft delete)
   deleteConversation: async (conversationId) => {
     const response = await axiosInstance.delete(`/chat/conversations/${conversationId}`);
@@ -163,11 +154,9 @@ const api = {
     const formData = new FormData();
     formData.append("pdf", file);
 
-    const response = await axiosInstance.post(`/upload`, formData, {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
-    });
+    // No manual Content-Type: axios sets multipart/form-data with the
+    // correct boundary itself when the body is FormData.
+    const response = await axiosInstance.post(`/upload`, formData);
     return response.data;
   },
 

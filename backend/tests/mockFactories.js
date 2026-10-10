@@ -30,6 +30,7 @@ function makeConversationModel() {
   MockConversation.find = jest.fn();
   MockConversation.findOne = jest.fn();
   MockConversation.findById = jest.fn();
+  MockConversation.updateOne = jest.fn();
   MockConversation.deleteOne = jest.fn();
   return MockConversation;
 }
@@ -44,6 +45,8 @@ function makeMessageModel() {
   MockMessage.findOne = jest.fn();
   MockMessage.create = jest.fn();
   MockMessage.deleteMany = jest.fn();
+  // Mirrors the real model's module-level export consumed by chatController.
+  MockMessage.VALID_ROLES = ['user', 'assistant'];
   return MockMessage;
 }
 

@@ -6,7 +6,6 @@ import numpy as np
 import json
 import pandas as pd
 import re
-from pathlib import Path
 import traceback
 
 # Add parent directory to path to import modules
@@ -21,13 +20,19 @@ logger = logging.getLogger("retriever")
 
 
 @functools.lru_cache(maxsize=8)
-def _load_times_csv(times_file):
-    """Read a monument schedule CSV once per path.
+def _load_times_records(times_file):
+    """Read a monument schedule CSV once per path and pre-clean every row.
 
-    The CSV is static data shipped with the repo, so caching the parsed
-    DataFrame at module level avoids re-reading the file on every request.
+    The CSV is static data shipped with the repo, so the regex cleanup runs
+    once at load time instead of on every request.
     """
-    return pd.read_csv(times_file)
+    records = []
+    for _, row in pd.read_csv(times_file).iterrows():
+        records.append({
+            "Location": re.sub(r'[^\w\s,:\-]', '', str(row.get("Location", ""))).strip(),
+            "Time": re.sub(r'[^\w\s,:;\-]', '', str(row.get("Opening Hours", ""))).strip(),
+        })
+    return records
 
 
 class Retriever:
@@ -103,22 +108,25 @@ class Retriever:
             if self.embeddings is None or self.metadata is None:
                 if not self.load_vectors():
                     return []
-            
-            # Use instance top_k if not specified
-            if top_k is None:
-                top_k = self.top_k
-                
+
+            # Snapshot to locals — a concurrent invalidation (the indexing
+            # path clears self.embeddings/self.metadata) must not turn them
+            # into None between the check above and np.dot below.
+            emb, meta = self.embeddings, self.metadata
+            if emb is None or meta is None:
+                return []
+
             # Ensure top_k is not larger than available data
-            top_k = min(top_k, len(self.metadata))
-            
+            top_k = min(top_k, len(meta))
+
             # Generate query embedding
             query_embedding = self.embedding_model.get_query_embedding(query)
             if query_embedding is None:
                 logger.error("Failed to generate query embedding")
                 return []
-            
+
             # Calculate similarity scores
-            similarity_scores = np.dot(self.embeddings, query_embedding)
+            similarity_scores = np.dot(emb, query_embedding)
             
             # Get top k indices
             top_indices = np.argsort(similarity_scores)[-top_k:][::-1]
@@ -127,11 +135,11 @@ class Retriever:
             results = []
             for i, idx in enumerate(top_indices):
                 idx_int = int(idx)
-                if idx_int >= len(self.metadata):
-                    logger.warning(f"Index {idx_int} out of bounds for metadata of length {len(self.metadata)}")
+                if idx_int >= len(meta):
+                    logger.warning(f"Index {idx_int} out of bounds for metadata of length {len(meta)}")
                     continue
-                    
-                chunk = self.metadata[idx_int]
+
+                chunk = meta[idx_int]
                 score = float(similarity_scores[idx])
                 if score < score_thresh:
                     continue
@@ -151,14 +159,13 @@ class Retriever:
             logger.error(traceback.format_exc())
             return []
 
-    def getTimes(self, query=None, city=None):
+    def getTimes(self, city=None):
         """
         Get opening hours and location data for Egyptian monuments.
-        
+
         Args:
-            query (str, optional): Query text for context or filtering
             city (str, optional): City name to filter locations
-            
+
         Returns:
             list: List of dictionaries with location and opening hours
         """
@@ -166,27 +173,20 @@ class Retriever:
             if not os.path.exists(self.times_file):
                 logger.error(f"Times file not found: {self.times_file}")
                 return []
-                
+
             # Module-level cache — the CSV is static data, so it is parsed
-            # once per path instead of re-read on every request
-            times_data = _load_times_csv(self.times_file)
-            
+            # AND regex-cleaned once per path instead of on every request
             results = []
-            for _, row in times_data.iterrows():
-                location = row.get("Location", "")
-                opening_hours = row.get("Opening Hours", "")
-                
-                # Clean up data
-                location = re.sub(r'[^\w\s,:\-]', '', str(location)).strip()
-                opening_hours = re.sub(r'[^\w\s,:;\-]', '', str(opening_hours)).strip()
-                
+            for row in _load_times_records(self.times_file):
+                location = row["Location"]
+
                 # Filter by city
                 if city and city.lower() not in location.lower():
                     continue
-                
+
                 results.append({
                     "Location": location,
-                    "Time": opening_hours,
+                    "Time": row["Time"],
                     "City": city if city else self._extract_city(location)
                 })
             

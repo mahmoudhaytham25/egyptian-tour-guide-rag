@@ -1,5 +1,5 @@
 // src/components/DocumentManager.jsx
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 
 const DocumentManager = () => {
@@ -9,12 +9,34 @@ const DocumentManager = () => {
   const [message, setMessage] = useState('');
   const [pollingActive, setPollingActive] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  // The "clear status after 3s" timeout — tracked so it can't fire after
+  // unmount (or stack up when indexing completes more than once).
+  const statusTimeoutRef = useRef(null);
+  const clearStatusSoon = useCallback(() => {
+    if (statusTimeoutRef.current) {
+      clearTimeout(statusTimeoutRef.current);
+    }
+    statusTimeoutRef.current = setTimeout(() => {
+      statusTimeoutRef.current = null;
+      setStatusMessage('');
+    }, 3000);
+  }, []);
 
   const fetchDocuments = useCallback(async () => {
     try {
       setLoading(true);
       const data = await api.getDocuments();
-      setDocuments(data.documents || []);
+      const docs = data.documents || [];
+      setDocuments(docs);
+      // A document that now reports indexed no longer needs its local
+      // 'indexing'/'failed' status entry.
+      setIndexingStatus((prev) => {
+        const next = { ...prev };
+        docs.forEach((doc) => {
+          if (doc.indexed) delete next[doc.filename];
+        });
+        return next;
+      });
     } catch (error) {
       console.error('Error fetching documents:', error);
       setMessage('Failed to load documents');
@@ -57,15 +79,13 @@ const DocumentManager = () => {
         if (status.isIndexing) {
           setStatusMessage(`Indexing in progress: ${status.progress}%`);
         } else if (status.lastIndexed) {
-          // Indexing is complete, refresh document list
+          // Indexing is complete — refresh the list and stop polling now;
+          // keep the completion message visible briefly via clearStatusSoon
+          // (each poll would otherwise reschedule the clear forever).
           await fetchDocuments();
           setStatusMessage(`Indexing completed at ${new Date(status.lastIndexed).toLocaleTimeString()}`);
-
-          // Stop polling after a delay to let user see completion message
-          setTimeout(() => {
-            setPollingActive(false);
-            setStatusMessage('');
-          }, 3000);
+          setPollingActive(false);
+          clearStatusSoon();
         } else {
           // Not indexing and nothing indexed — nothing left to poll for
           setPollingActive(false);
@@ -80,6 +100,16 @@ const DocumentManager = () => {
     // Clean up interval on unmount or when polling stops
     return () => clearInterval(interval);
   }, [pollingActive, fetchDocuments]);
+
+  // Clear the deferred status-cleanup timeout on unmount.
+  useEffect(() => {
+    return () => {
+      if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+        statusTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     fetchDocuments();
@@ -135,8 +165,8 @@ const DocumentManager = () => {
             <ul className="documents-list">
               {documents
                 .filter(doc => !doc.indexed)
-                .map((doc, index) => (
-                  <li key={index} className="document-item">
+                .map((doc) => (
+                  <li key={doc.filename} className="document-item">
                     <span className="document-name">
                       <span className="doc-icon" aria-hidden="true">📄</span>
                       {doc.originalName || doc.filename}
@@ -165,8 +195,8 @@ const DocumentManager = () => {
             <ul className="documents-list">
               {documents
                 .filter(doc => doc.indexed)
-                .map((doc, index) => (
-                  <li key={index} className="document-item indexed">
+                .map((doc) => (
+                  <li key={doc.filename} className="document-item indexed">
                     <span className="document-name">
                       <span className="doc-icon" aria-hidden="true">📄</span>
                       {doc.originalName || doc.filename}

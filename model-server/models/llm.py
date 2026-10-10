@@ -1,11 +1,17 @@
 import os
-import logging
 import sys
+import time
+import logging
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag.utils.env_loader import get_api_key
+from models.gemini import (
+    configure_gemini,
+    is_rate_limit_error,
+    is_retryable_error,
+    RATE_LIMIT_WAIT_SECONDS,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -14,6 +20,13 @@ logger = logging.getLogger(__name__)
 # Per-request timeout (seconds) for Gemini generate_content calls, so a hung
 # API request can't block a gunicorn worker thread forever.
 GENERATE_TIMEOUT_SECONDS = 120
+
+# Retry policy — mirrors models/embedding.py: a 429 means the per-minute
+# quota is exhausted and needs the long RATE_LIMIT_WAIT_SECONDS wait; other
+# transient errors use short exponential backoff. Kept to 1-2 retries so a
+# mid-query hiccup doesn't blow the request's latency budget.
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 2.0
 
 class LLMModel:
     def __init__(self, model_name="gemini-3.8-flash"):
@@ -32,34 +45,14 @@ class LLMModel:
         Load the model for inference.
         """
         try:
-            # Try custom loader first
-            try:
-                from rag.utils.env_loader import get_api_key
-                self.api_key = get_api_key("GEMINI_API_KEY", prompt_if_missing=False)
-            except ImportError:
-                # Fallback to direct environment variable
-                self.api_key = os.getenv("GEMINI_API_KEY")
+            # Shared configuration — raises a clear error when
+            # GEMINI_API_KEY is missing.
+            self.api_key = configure_gemini()
 
-            # Check if API key is available
-            if not self.api_key:
-                # Try loading from .env file directly
-                try:
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    self.api_key = os.getenv("GEMINI_API_KEY")
-                except ImportError:
-                    pass
-
-            if not self.api_key:
-                logger.error("GEMINI_API_KEY not available. Please set it in your environment or .env file")
-                return False
             # google-generativeai must be installed (see requirements.txt)
             import google.generativeai as genai
 
             logger.info(f"Initializing Gemini API with model: {self.model_name}")
-
-            # Configure Gemini API
-            genai.configure(api_key=self.api_key)
 
             # Initialize the model
             self.model = genai.GenerativeModel(self.model_name,
@@ -92,29 +85,45 @@ class LLMModel:
 
         Raises:
             RuntimeError: If the model cannot be loaded
-            Exception: Propagates Gemini API errors. Callers must handle
-                failures and produce a user-facing fallback — the error
-                string is never safe to return as answer text (it used to
-                be rendered to users and saved to MongoDB).
+            Exception: Propagates Gemini API errors once retries are
+                exhausted (or immediately for non-retryable failures).
+                Callers must handle failures and produce a user-facing
+                fallback — the error string is never safe to return as
+                answer text (it used to be rendered to users and saved to
+                MongoDB).
         """
         if not self.model_loaded:
             if not self.load_model():
                 raise RuntimeError("Failed to load the LLM model")
 
-        try:
-            # Generate content with an explicit per-request timeout so a
-            # hung API call can't tie up a worker thread indefinitely
-            response = self.model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens
-                },
-                request_options={"timeout": GENERATE_TIMEOUT_SECONDS}
-            )
+        delay = INITIAL_BACKOFF_SECONDS
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                # Generate content with an explicit per-request timeout so a
+                # hung API call can't tie up a worker thread indefinitely
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config={
+                        "temperature": temperature,
+                        "max_output_tokens": max_tokens
+                    },
+                    request_options={"timeout": GENERATE_TIMEOUT_SECONDS}
+                )
 
-            # Return the text response
-            return response.text
-        except Exception as e:
-            logger.error(f"Error generating text: {str(e)}")
-            raise
+                # Return the text response
+                return response.text
+            except Exception as e:
+                # Non-retryable errors (400-class rejections) fail
+                # identically on every attempt — surface them immediately.
+                if attempt == MAX_RETRIES or not is_retryable_error(e):
+                    logger.error(f"Error generating text: {str(e)}")
+                    raise
+                # Per-minute quota exhaustion needs a long wait, not jitter —
+                # regular transient errors keep the short exponential backoff.
+                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
+                logger.warning(
+                    f"LLM request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
+                    f"retrying in {wait:.0f}s"
+                )
+                time.sleep(wait)
+                delay *= 2

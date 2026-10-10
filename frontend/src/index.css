@@ -12,22 +12,26 @@
   --font-display: "Cinzel", Georgia, "Times New Roman", serif;
   --gold: #d4af37;
   --gold-deep: #b8901f;
+  --gold-hover: #e0be45;
+  --gold-hover-deep: #c29a22;
   --ink: #242842;
+  --cream: #e9e5d5;
+  --slate: #333a68;
+  --muted: #8a8da3;
+  --muted-light: #9a9db2;
+  --bg: #181c2e;
+  --card: #2b2e42;
+  --sand: #cdbf8f;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: #181c2e;
-  color: #2b2e42;
+  background-color: var(--bg);
+  color: var(--card);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
     "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
-    monospace;
 }

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import ChatInterface from "./ChatInterface";
 import api from "../services/api";
 
@@ -78,6 +79,14 @@ const sendViaEnter = (text) => {
   fireEvent.keyDown(textarea, { key: "Enter" });
 };
 
+// The header renders a react-router <Link>, so every render needs a Router.
+const renderChat = () =>
+  render(
+    <MemoryRouter>
+      <ChatInterface />
+    </MemoryRouter>
+  );
+
 describe("ChatInterface", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -102,7 +111,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
 
     expect(await screen.findByText("First chat")).toBeInTheDocument();
     expect(screen.getByText("Second chat")).toBeInTheDocument();
@@ -116,13 +125,13 @@ describe("ChatInterface", () => {
   });
 
   it("shows the empty sidebar hint when there are no conversations", async () => {
-    render(<ChatInterface />);
+    renderChat();
     expect(await screen.findByText("No conversations yet.")).toBeInTheDocument();
   });
 
   it("skips history loading entirely when there is no user id", async () => {
     api.getUserId.mockReturnValue(null);
-    render(<ChatInterface />);
+    renderChat();
     await flushPromises();
     expect(api.getConversations).not.toHaveBeenCalled();
   });
@@ -131,7 +140,7 @@ describe("ChatInterface", () => {
     const answer =
       "Answer42: The Nile shaped Egyptian civilization in profound ways.";
     api.askQuestion.mockResolvedValue({ answer });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     vi.useFakeTimers();
@@ -171,7 +180,7 @@ describe("ChatInterface", () => {
     api.askQuestion.mockResolvedValue({
       answer: "A".repeat(200) + " end",
     });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     vi.useFakeTimers();
@@ -196,7 +205,7 @@ describe("ChatInterface", () => {
   });
 
   it("guides instead of querying on a vague first question", async () => {
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     sendViaEnter("tell me more");
@@ -215,7 +224,7 @@ describe("ChatInterface", () => {
     api.askQuestion.mockResolvedValue({
       answer: "Pyramids were royal tombs built over decades.",
     });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     vi.useFakeTimers();
@@ -248,7 +257,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
 
     vi.useFakeTimers();
@@ -276,13 +285,125 @@ describe("ChatInterface", () => {
     ).toHaveTextContent("Second chat");
   });
 
+  it("drops a /query reply that resolves after switching conversations", async () => {
+    let resolveAsk;
+    api.askQuestion.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      })
+    );
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockImplementation(async (id) =>
+      id === "c1" ? C1_MESSAGES : C2_MESSAGES
+    );
+
+    renderChat();
+    await screen.findByText("First question");
+
+    // The fetch is still in flight when the user switches conversation.
+    typeQuestion("still thinking?");
+    clickSend();
+    await flushPromises();
+    expect(api.askQuestion).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("still thinking?")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Second chat"));
+    expect(await screen.findByText("Second convo question")).toBeInTheDocument();
+
+    // The late reply must not be appended to the newly opened pane — the
+    // server persists it into the conversation it was asked in.
+    await act(async () => {
+      resolveAsk({ answer: "late-arriving answer" });
+    });
+    await flushPromises();
+    expect(screen.queryByText("late-arriving answer")).not.toBeInTheDocument();
+  });
+
+  it("drops a /query reply that resolves after '+ New chat'", async () => {
+    let resolveAsk;
+    api.askQuestion.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      })
+    );
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockImplementation(async (id) =>
+      id === "c1" ? C1_MESSAGES : C2_MESSAGES
+    );
+
+    renderChat();
+    await screen.findByText("First question");
+
+    typeQuestion("slow question");
+    clickSend();
+    await flushPromises();
+    expect(api.askQuestion).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "+ New chat" }));
+    await flushPromises();
+    expect(screen.queryByText("slow question")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveAsk({ answer: "too late" });
+    });
+    await flushPromises();
+    expect(screen.queryByText("too late")).not.toBeInTheDocument();
+  });
+
+  it("disables the send button while conversation history is loading", async () => {
+    let resolveConversation;
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockReturnValue(
+      new Promise((resolve) => {
+        resolveConversation = resolve;
+      })
+    );
+
+    renderChat();
+    typeQuestion("queued?");
+    expect(document.querySelector(".send-button")).toBeDisabled();
+
+    await act(async () => {
+      resolveConversation(C1_MESSAGES);
+    });
+    expect(await screen.findByText("First question")).toBeInTheDocument();
+    expect(document.querySelector(".send-button")).not.toBeDisabled();
+  });
+
+  it("shows a retryable sidebar error when the conversation list fails", async () => {
+    api.getConversations.mockRejectedValueOnce({
+      response: { status: 500 },
+    });
+
+    renderChat();
+    expect(
+      await screen.findByText("Could not load conversations.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No conversations yet.")
+    ).not.toBeInTheDocument();
+
+    // Retry refetches; the recovered list renders normally.
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockImplementation(async (id) =>
+      id === "c1" ? C1_MESSAGES : C2_MESSAGES
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("First chat")).toBeInTheDocument();
+    expect(await screen.findByText("First question")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Could not load conversations.")
+    ).not.toBeInTheDocument();
+  });
+
   it("loads a conversation's messages when its sidebar item is clicked", async () => {
     api.getConversations.mockResolvedValue(CONVERSATIONS);
     api.getConversation.mockImplementation(async (id) =>
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
     api.getConversation.mockClear();
 
@@ -308,7 +429,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
     expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBe("c1");
 
@@ -329,7 +450,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
 
     const deleteButtons = screen.getAllByRole("button", {
@@ -360,7 +481,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
 
     fireEvent.click(
@@ -376,7 +497,7 @@ describe("ChatInterface", () => {
     api.askQuestion.mockRejectedValue({
       response: { data: { message: "Model is down" } },
     });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     typeQuestion("Will this fail?");
@@ -392,7 +513,7 @@ describe("ChatInterface", () => {
     api.askQuestion
       .mockRejectedValueOnce({ response: { status: 400 } })
       .mockResolvedValueOnce({ answer: "ok" });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     typeQuestion("Trigger the retry");
@@ -413,7 +534,7 @@ describe("ChatInterface", () => {
 
   it("falls back to plain /query when the conversation API is missing", async () => {
     api.getConversations.mockRejectedValue({ response: { status: 404 } });
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     // "What is this?" would trip the vague-question guard — ask a real one.
@@ -433,7 +554,7 @@ describe("ChatInterface", () => {
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
     );
 
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("First question");
 
     const evt = new Event("storage");
@@ -451,7 +572,7 @@ describe("ChatInterface", () => {
   });
 
   it("calls api.logout from the header logout button", async () => {
-    render(<ChatInterface />);
+    renderChat();
     await screen.findByText("No conversations yet.");
 
     // jsdom reports the resulting navigation as "not implemented" — that's

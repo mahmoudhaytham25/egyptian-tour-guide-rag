@@ -7,14 +7,27 @@ const ragController = require('../controllers/ragController');
 const auth = require('../middleware/auth');
 const { rateLimit } = require('../middleware/rateLimit');
 const { HttpError } = require('../middleware/errors');
+const { DATA_DIR } = require('../config/paths');
+
+// Store uploads under a sanitized version of the client's filename: a safe
+// basename ending in .pdf, matching the model server's filename validation.
+function safePdfFilename(originalname) {
+  const base = path.basename(String(originalname || ''));
+  const safe = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '');
+  return safe.toLowerCase().endsWith('.pdf') && safe.length > 4 ? safe : null;
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function(req, file, cb) {
-    cb(null, path.join(__dirname, '../../model-server/data/'));
+    cb(null, DATA_DIR);
   },
   filename: function(req, file, cb) {
-    cb(null, 'egyptian_history.pdf');
+    const safe = safePdfFilename(file.originalname);
+    if (!safe) {
+      return cb(new Error('Invalid filename. PDF files must end in .pdf'));
+    }
+    cb(null, safe);
   }
 });
 

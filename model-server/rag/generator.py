@@ -3,7 +3,6 @@ import sys
 import logging
 import json
 import argparse
-from pathlib import Path
 from typing import List, Dict
 
 # Add parent directory to path to import modules
@@ -101,7 +100,7 @@ class Generator:
             logger.error(f"Error parsing parameters: {str(e)}")
             return {"error": "invalid_format"}
     
-    def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str=""):
+    def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str="", retriever=None):
         """
         Generate a schedule response for Egyptian monument visits.
 
@@ -109,11 +108,15 @@ class Generator:
             query (str): User query
             extracted_parameters (dict): Parameters from get_schedule_parameters;
                 defaults to an invalid_format error when not provided
+            retriever: Retriever for the queried document — times data is
+                document-independent, but using the caller's retriever keeps
+                a single shared instance per document
 
         Returns:
             dict: Response with schedule information or error
         """
         try:
+            retriever = retriever or self.retriever
             # Step 1: Extract parameters from query
             parameters = extracted_parameters if extracted_parameters is not None else {"error": "invalid_format"}
             
@@ -136,10 +139,8 @@ class Generator:
                     }
         
             # Step 3: Get relevant location data from the retriever
-            results = self.retriever.getTimes(query, parameters["city"])
-            
-            #logger.info(f"Retrieved times data: {results}")
-            
+            results = retriever.getTimes(city=parameters["city"])
+
             if not results or len(results) == 0:
                 return {
                     "answer": f"I don't have information about monuments or locations in {parameters['city']}. Could you try another Egyptian city?",
@@ -180,7 +181,6 @@ class Generator:
             """
             
             # Generate the schedule
-            #logger.info(f"Schedule prompt sent to LLM:\n{schedule_prompt}")
             schedule_response = self.llm.generate(schedule_prompt, max_tokens= max_tokens)
             logger.info(f"Schedule response from LLM:\n{schedule_response}")
             
@@ -198,11 +198,10 @@ class Generator:
             }
             
         except Exception as e:
+            # Propagate — /query must return success:false instead of
+            # persisting a generic apology as the assistant's message.
             logger.error(f"Error generating schedule: {str(e)}", exc_info=True)
-            return {
-                "answer": "I'm having trouble generating a schedule right now — please try again.",
-                "query_type": "schedule-seeking"
-            }
+            raise
 
     def generate_conversational_response(self, query, conversation_history=None):
         """
@@ -256,12 +255,10 @@ class Generator:
                 "is_conversational": True
             }
         except Exception as e:
+            # Propagate — /query must return success:false instead of
+            # persisting a generic apology as the assistant's message.
             logger.error(f"Error generating conversational response: {str(e)}", exc_info=True)
-            return {
-                "answer": "I'm having trouble generating a response right now — please try again.",
-                "sources": [],
-                "is_conversational": True
-            }
+            raise
     
     def create_enhanced_prompt(self, query, retrieved_documents, chat_history_str=""):
         """
@@ -303,23 +300,28 @@ Respond with a comprehensive answer:
         return prompt
 
     
-    def generate_response(self, query, top_k=10, chat_history=None):
+    def generate_response(self, query, top_k=10, chat_history=None, retriever=None):
         """
         Generate a response using the RAG pipeline with chat history and query enhancement.
-        
+
         Args:
             query: User query text
             top_k: Number of documents to retrieve
             chat_history: Optional chat history from MongoDB
-        
+            retriever: Retriever for the document being queried — passed
+                per call (not stored on self) because gunicorn serves
+                concurrent queries for different documents on different
+                threads and a shared attribute would race.
+
         Returns:
             Generated response with sources
         """
         try:
+            retriever = retriever or self.retriever
+
             # Classify the query intent
             intent = self.classify_intent(query)
-            #logger.info(f"Extracted History: {chat_history}")
-            
+
             # Process chat history if provided
             formatted_history = ""
             selected_history = []
@@ -336,13 +338,17 @@ Respond with a comprehensive answer:
             
             # Generate appropriate response based on intent
             if intent == "schedule-seeking":
-                original_query= query
-                params= self.get_schedule_parameters(original_query)
+                original_query = query
+                # Enhance FIRST, then extract parameters — mirroring the
+                # information-seeking branch. Extracting from the raw query
+                # misses context established earlier in the conversation
+                # ("plan a trip there on Friday" loses the city).
                 if chat_history and len(selected_history) > 0:
                     query = self.enhance_query_with_context(original_query, selected_history, self.llm)
                     logger.info(f"Enhanced query: '{original_query}' → '{query}'")
+                params = self.get_schedule_parameters(query)
 
-                return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history)
+                return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history, retriever = retriever)
             elif intent == "conversational":
                 return self.generate_conversational_response(query, selected_history)
             else:
@@ -353,7 +359,7 @@ Respond with a comprehensive answer:
                     logger.info(f"Enhanced query: '{original_query}' → '{query}'")
                 
                 # Use enhanced query for retrieval
-                search_results = self.retriever.search(query, top_k=top_k)
+                search_results = retriever.search(query, top_k=top_k)
                 
                 # Convert search results to expected format
                 retrieved_documents = []
@@ -363,7 +369,7 @@ Respond with a comprehensive answer:
                         "text": chunk.get("text", ""),
                         "metadata": {
                             "page": chunk.get("page_num", "Unknown"),
-                            "source": self.retriever.pdf_name
+                            "source": retriever.pdf_name
                         }
                     })
                 
@@ -394,12 +400,10 @@ Respond with a comprehensive answer:
                     "enhanced_query": query if query != original_query else None
                 }
         except Exception as e:
+            # Propagate — /query must return success:false instead of
+            # persisting a generic apology as the assistant's message.
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
-            return {
-                "answer": "I'm having trouble generating a response right now — please try again.",
-                "sources": [],
-                "is_conversational": False
-            }
+            raise
 
     def enhance_query_with_context(self, query, chat_history, llm):
         """
@@ -462,7 +466,8 @@ Respond with a comprehensive answer:
         # failure fall back to the original query rather than failing the
         # whole request.
         try:
-            enhanced_query = llm.generate(enhancement_prompt).strip()
+            # A ≤200-char rewrite doesn't need the 4096-token default
+            enhanced_query = llm.generate(enhancement_prompt, max_tokens=256).strip()
         except Exception as e:
             logger.warning(f"Query enhancement failed, using original query: {str(e)}")
             return query
@@ -588,8 +593,8 @@ def main():
             logger.error("Failed to parse conversation history JSON")
     
     response = generator.generate_response(
-        args.query, 
-        conversation_history=conversation_history,
+        args.query,
+        chat_history=conversation_history,
         top_k=args.top_k
     )
     

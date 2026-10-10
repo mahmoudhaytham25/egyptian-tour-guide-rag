@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 
 const MAX_TEXTAREA_HEIGHT = 132; // ~5 lines before the field starts scrolling
 
@@ -28,6 +28,7 @@ const ChatInput = ({ value, onChange, onKeyDown, onSend, disabled, inputRef }) =
           ref={inputRef}
           className="chat-input"
           placeholder="Type your message..."
+          aria-label="Type your message"
           value={value}
           onChange={handleChange}
           onKeyDown={onKeyDown}

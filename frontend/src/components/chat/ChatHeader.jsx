@@ -1,4 +1,4 @@
-import React from "react";
+import { Link } from "react-router-dom";
 import icon from "../../Assets/Images/pharaoh-icon.png";
 
 const ChatHeader = ({ onLogout }) => (
@@ -11,10 +11,9 @@ const ChatHeader = ({ onLogout }) => (
       </div>
     </div>
     <div className="chat-header-actions">
-      {/* Plain <a> — ChatInterface tests render without a Router. */}
-      <a className="chat-nav-link" href="/documents">
+      <Link className="chat-nav-link" to="/documents">
         Knowledge Base
-      </a>
+      </Link>
       <button type="button" className="logout-button" onClick={onLogout}>
         Logout
       </button>

@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 import sys
 
 # Configure logging
@@ -9,16 +10,11 @@ logger = logging.getLogger(__name__)
 class IntentClassifier:
     def __init__(self, llm=None):
         if llm is None:
-            # Add project root to path
-            import os, sys
+            # Add project root to path so models.llm resolves when this
+            # file is run directly as a script
             sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            try:
-                from models.llm import LLMModel
-                self.llm = LLMModel()
-            except ImportError as e:
-                logger.error(f"Failed to import LLMModel: {e}")
-                from llm import LLMModel  # Try relative import as fallback
-                self.llm = LLMModel()
+            from models.llm import LLMModel
+            self.llm = LLMModel()
         else:
             self.llm = llm
 

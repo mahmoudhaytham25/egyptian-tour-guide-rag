@@ -1,12 +1,12 @@
 require('dotenv').config(); // This must be at the top to load environment variables
 
-const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
 
 const { createApp } = require('./app');
 const connectDB = require('./config/database');
 const { validateEnv } = require('./config/env');
+const { DATA_DIR } = require('./config/paths');
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -20,8 +20,7 @@ async function start() {
   await connectDB();
 
   // Create the shared uploads directory if it doesn't exist.
-  const dataDir = path.join(__dirname, '../model-server/data');
-  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const app = createApp();
   const server = app.listen(PORT, () => {
@@ -64,4 +63,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { start, createApp };
+module.exports = { start };

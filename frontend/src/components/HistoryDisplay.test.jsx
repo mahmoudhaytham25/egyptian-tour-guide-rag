@@ -87,7 +87,7 @@ describe("HistoryDisplay", () => {
     expect(dates[1].textContent).toBe("");
   });
 
-  it("calls onSelect when a conversation is clicked or activated by keyboard", () => {
+  it("calls onSelect when a conversation is clicked", () => {
     const onSelect = vi.fn();
     renderSidebar({ conversations: CONVERSATIONS, onSelect });
 
@@ -95,13 +95,26 @@ describe("HistoryDisplay", () => {
     expect(onSelect).toHaveBeenCalledWith(CONVERSATIONS[0]);
 
     onSelect.mockClear();
-    const item = screen.getByText("Temples chat").closest(".conversation-item");
-    fireEvent.keyDown(item, { key: "Enter" });
+    // Each row's click target is a real <button>, so keyboard activation
+    // (Enter/Space → click) is native — click covers the handler.
+    fireEvent.click(screen.getByRole("button", { name: /Temples chat/ }));
     expect(onSelect).toHaveBeenCalledWith(CONVERSATIONS[1]);
+  });
 
-    onSelect.mockClear();
-    fireEvent.keyDown(item, { key: " " });
-    expect(onSelect).toHaveBeenCalledWith(CONVERSATIONS[1]);
+  it("shows a retryable error instead of the list when loading failed", () => {
+    const onRetry = vi.fn();
+    renderSidebar({
+      loadError: true,
+      onRetry,
+      conversations: CONVERSATIONS,
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Could not load conversations.");
+    expect(screen.queryByText("Pyramids chat")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("calls onNewChat from the header button", () => {

@@ -73,22 +73,6 @@ jobs:
         working-directory: model-server
         run: python -m pytest
 
-  frontend-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: Build
-        working-directory: frontend
-        run: npm run build
-
   frontend-tests:
     runs-on: ubuntu-latest
     steps:
@@ -104,6 +88,24 @@ jobs:
       - name: Run tests
         working-directory: frontend
         run: npm test
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # compose interpolates ${VAR:?} at parse time even for `build`, so
+      # dummy values are required to get past validation. Building all three
+      # images is also the only CI coverage of model-server/requirements.txt
+      # (the model-server-tests job installs requirements-dev.txt only).
+      - name: Build all images
+        env:
+          GEMINI_API_KEY: ci-dummy
+          JWT_SECRET: ci-dummy
+          INTERNAL_API_TOKEN: ci-dummy
+        run: docker compose build
 
   frontend-e2e:
     runs-on: ubuntu-latest

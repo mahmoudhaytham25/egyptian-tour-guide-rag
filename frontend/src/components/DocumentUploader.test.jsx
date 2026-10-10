@@ -61,10 +61,12 @@ describe("DocumentUploader", () => {
       await screen.findByText("Document uploaded successfully: egypt.pdf")
     ).toBeInTheDocument();
     expect(onDocumentUploaded).toHaveBeenCalledTimes(1);
-    // The file state resets after the upload finishes.
+    // The file state resets after the upload finishes — including the
+    // uncontrolled input, so the same file can be picked again.
     expect(
       screen.getByRole("button", { name: "Upload Document" })
     ).toBeDisabled();
+    expect(document.querySelector('input[type="file"]')).toHaveValue("");
   });
 
   it("works without the onDocumentUploaded callback", async () => {

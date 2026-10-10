@@ -8,28 +8,26 @@ from tqdm import tqdm
 import numpy as np
 import json
 import uuid
-from pathlib import Path
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.embedding import EmbeddingModel
-from rag.utils import ensure_directory, get_vector_store_dir, chunk_list
+from rag.utils import get_vector_store_dir
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class PDFIndexer:
-    def __init__(self, pdf_path, chunk_size=500, chunk_overlap=100, batch_size=200):
+    def __init__(self, pdf_path, chunk_size=500, chunk_overlap=100):
         """
         Initialize the PDF indexer.
-        
+
         Args:
             pdf_path (str): Path to the PDF file
             chunk_size (int): Size of text chunks in characters
             chunk_overlap (int): Overlap between chunks in characters
-            batch_size (int): Batch size for processing
         """
         # chunk_overlap >= chunk_size would make the chunking cursor stop
         # advancing (or move backwards) and infinite-loop in split_into_chunks
@@ -40,7 +38,6 @@ class PDFIndexer:
         self.pdf_path = pdf_path
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        self.batch_size = batch_size
         self.embedding_model = EmbeddingModel()
         self.vector_store_dir = get_vector_store_dir()
         
@@ -142,26 +139,13 @@ class PDFIndexer:
             
             # Extract texts from chunks
             texts = [chunk["text"] for chunk in chunks]
-            
-            # Process in batches to avoid memory issues
-            all_embeddings = []
-            
-            # Split texts into batches
-            text_batches = chunk_list(texts, self.batch_size)
-            
-            for i, batch in enumerate(text_batches):
-                logger.info(f"Processing batch {i+1}/{len(text_batches)}")
-                batch_embeddings = self.embedding_model.get_embeddings(batch)
-                
-                if batch_embeddings is not None:
-                    all_embeddings.append(batch_embeddings)
-                else:
-                    logger.error(f"Failed to generate embeddings for batch {i+1}")
-                    return None, None
-            
-            # Combine all embeddings
-            if all_embeddings:
-                embeddings = np.vstack(all_embeddings)
+
+            # get_embeddings already splits at the API's 100-text cap (with
+            # per-batch progress via tqdm) — a second batching layer here
+            # was redundant
+            embeddings = self.embedding_model.get_embeddings(texts)
+
+            if embeddings is not None:
                 return embeddings, chunks
             else:
                 logger.error("No embeddings were generated")
@@ -258,21 +242,18 @@ def main():
     parser.add_argument("pdf_path", help="Path to the PDF file")
     parser.add_argument("--chunk-size", type=int, default=500, help="Chunk size in characters")
     parser.add_argument("--chunk-overlap", type=int, default=100, help="Chunk overlap in characters")
-    parser.add_argument("--batch-size", type=int, default=200, help="Batch size for processing")
-    
+
     args = parser.parse_args()
-    
+
     indexer = PDFIndexer(
         args.pdf_path,
         chunk_size=args.chunk_size,
-        chunk_overlap=args.chunk_overlap,
-        batch_size=args.batch_size
+        chunk_overlap=args.chunk_overlap
     )
-    
+
     success = indexer.index()
-    
+
     if success:
-        print("progress: 100")
         sys.exit(0)
     else:
         sys.exit(1)

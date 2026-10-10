@@ -14,6 +14,8 @@ __pycache__/
 
 # Generated data
 model-server/vector_store/
+model-server/data/*
+!model-server/data/egyptian_history.pdf
 
 # Build output
 /build

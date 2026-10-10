@@ -7,12 +7,6 @@
   margin: 0 auto;
 }
 
-.home-container {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
 /* ------------------------------------------------------------------ */
 /* Shared themed backdrop (chat + documents pages)                     */
 /* ------------------------------------------------------------------ */
@@ -66,7 +60,7 @@
   gap: 12px;
   padding: 10px 16px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #242842 0%, #3a3f66 100%);
+  background: linear-gradient(135deg, var(--ink) 0%, #3a3f66 100%);
   border: 1px solid rgba(212, 175, 55, 0.35);
   box-shadow: 0 8px 24px rgba(10, 12, 25, 0.3);
 }
@@ -75,7 +69,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #e9e5d5;
+  color: var(--cream);
   text-decoration: none;
   font-size: 0.9rem;
   font-weight: 600;
@@ -87,13 +81,13 @@
 
 .page-nav-back:hover {
   background: rgba(212, 175, 55, 0.18);
-  border-color: #d4af37;
+  border-color: var(--gold);
   color: #fff;
 }
 
 .page-nav-button {
   background: transparent;
-  color: #e9e5d5;
+  color: var(--cream);
   border: 1px solid rgba(255, 255, 255, 0.35);
   padding: 7px 14px;
   border-radius: 10px;
@@ -105,7 +99,7 @@
 
 .page-nav-button:hover {
   background: rgba(212, 175, 55, 0.18);
-  border-color: #d4af37;
+  border-color: var(--gold);
   color: #fff;
 }
 
@@ -113,15 +107,11 @@
   flex: 1;
 }
 
-/* Chat page — width:100%, never margin:auto: inside the column-flex
-   .home-container, auto margins would shrink the page to fit-content so
-   the chat window would grow/shrink with its messages. */
+/* Chat page — width:100%, never margin:auto: inside a column-flex parent,
+   auto margins would shrink the page to fit-content so the chat window
+   would grow/shrink with its messages. */
 .chat-page {
   width: 100%;
-}
-
-.chat-page-main {
-  padding: 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -136,14 +126,14 @@
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(255, 255, 255, 0.45);
   box-shadow: 0 12px 40px rgba(10, 12, 25, 0.28);
-  color: #2b2e42;
+  color: var(--card);
 }
 
 .documents-section-header h2 {
   margin: 0;
-  font-family: "Cinzel", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 1.4rem;
-  color: #333a68;
+  color: var(--slate);
 }
 
 .documents-section-header p {
@@ -155,7 +145,7 @@
 .documents-section h3 {
   margin: 20px 0 10px;
   font-size: 1.02rem;
-  color: #333a68;
+  color: var(--slate);
 }
 
 .documents-section h4 {
@@ -194,13 +184,13 @@
 
 .dropzone:hover,
 .dropzone.drag-over {
-  border-color: #d4af37;
+  border-color: var(--gold);
   background: rgba(212, 175, 55, 0.1);
 }
 
 .dropzone.has-file {
   border-style: solid;
-  border-color: #d4af37;
+  border-color: var(--gold);
   background: rgba(212, 175, 55, 0.12);
 }
 
@@ -229,7 +219,7 @@
   border: 1px solid rgba(36, 40, 66, 0.18);
   border-radius: 12px;
   background: #ffffff;
-  color: #333a68;
+  color: var(--slate);
   font-size: 0.88rem;
   font-weight: 600;
   font-family: inherit;
@@ -239,7 +229,7 @@
 }
 
 .kb-button:hover:not(:disabled) {
-  border-color: #d4af37;
+  border-color: var(--gold);
   background: rgba(212, 175, 55, 0.12);
 }
 
@@ -250,14 +240,14 @@
 
 .kb-button-primary,
 .index-button {
-  background: linear-gradient(135deg, #d4af37, #b8901f);
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
   border-color: transparent;
-  color: #242842;
+  color: var(--ink);
 }
 
 .kb-button-primary:hover:not(:disabled),
 .index-button:hover:not(:disabled) {
-  background: linear-gradient(135deg, #e0be45, #c29a22);
+  background: linear-gradient(135deg, var(--gold-hover), var(--gold-hover-deep));
   border-color: transparent;
   box-shadow: 0 4px 10px rgba(140, 109, 31, 0.3);
 }
@@ -288,7 +278,7 @@
 .dm-hint {
   margin: 8px 0;
   font-size: 0.85rem;
-  color: #8a8da3;
+  color: var(--muted);
 }
 
 /* Document lists */

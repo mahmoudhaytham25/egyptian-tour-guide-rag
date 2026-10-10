@@ -3,11 +3,17 @@ import sys
 import time
 import logging
 import numpy as np
+from tqdm import tqdm
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rag.utils.env_loader import get_api_key
+from models.gemini import (
+    configure_gemini,
+    is_rate_limit_error,
+    is_retryable_error,
+    RATE_LIMIT_WAIT_SECONDS,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -25,10 +31,10 @@ MAX_BATCH_SIZE = 100
 
 # Retry policy. Free-tier embedding quota is 100 units/min and each text in a
 # batch counts — a full batch can consume an entire minute's budget, so 429s
-# need ~60s waits, not the usual short backoff.
+# need ~60s waits (RATE_LIMIT_WAIT_SECONDS, shared via models.gemini), not
+# the usual short backoff.
 MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2.0
-RATE_LIMIT_WAIT_SECONDS = 65.0
 
 # Per-request timeout for each embed_content call. Worst case per batch is
 # MAX_RETRIES * EMBED_TIMEOUT_SECONDS plus the sleeps between attempts
@@ -64,32 +70,12 @@ class EmbeddingModel:
         error style used by models/llm.py.
         """
         try:
-            # Try custom loader first
-            try:
-                self.api_key = get_api_key("GEMINI_API_KEY", prompt_if_missing=False)
-            except ImportError:
-                # Fallback to direct environment variable
-                self.api_key = os.getenv("GEMINI_API_KEY")
-
-            # Check if API key is available
-            if not self.api_key:
-                # Try loading from .env file directly
-                try:
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    self.api_key = os.getenv("GEMINI_API_KEY")
-                except ImportError:
-                    pass
-
-            if not self.api_key:
-                logger.error("GEMINI_API_KEY not available. Please set it in your environment or .env file")
-                return False
-
-            # google-generativeai must be installed (see requirements.txt)
-            import google.generativeai as genai
+            # Shared configuration — raises a clear error when
+            # GEMINI_API_KEY is missing instead of falling through to a
+            # chain of dead fallback branches.
+            self.api_key = configure_gemini()
 
             logger.info(f"Configuring Gemini embeddings API with model: {self.model_name}")
-            genai.configure(api_key=self.api_key)
 
             self.model_loaded = True
             logger.info("Gemini embeddings API configured successfully")
@@ -120,12 +106,14 @@ class EmbeddingModel:
                 )
                 return result["embedding"]
             except Exception as e:
-                if attempt == MAX_RETRIES:
+                # Non-retryable errors (400-class rejections) fail
+                # identically on every attempt — surface them immediately
+                # instead of burning MAX_RETRIES waits.
+                if attempt == MAX_RETRIES or not is_retryable_error(e):
                     raise
                 # Per-minute quota exhaustion needs a long wait, not jitter —
                 # regular transient errors keep the short exponential backoff.
-                is_rate_limit = "429" in str(e) or "quota" in str(e).lower()
-                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit else delay
+                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
                 logger.warning(
                     f"Embedding request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
                     f"retrying in {wait:.0f}s"
@@ -167,7 +155,7 @@ class EmbeddingModel:
             batch_size = min(batch_size, MAX_BATCH_SIZE)
 
             all_embeddings = []
-            for i in range(0, len(texts), batch_size):
+            for i in tqdm(range(0, len(texts), batch_size), desc="Embedding batches"):
                 batch_texts = texts[i:i + batch_size]
                 batch_embeddings = self._embed_batch(batch_texts, task_type)
                 all_embeddings.append(np.asarray(batch_embeddings, dtype=np.float32))

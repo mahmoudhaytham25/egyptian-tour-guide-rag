@@ -1,4 +1,3 @@
-import React from "react";
 import HistoryDisplay from "./HistoryDisplay";
 import useChat from "./chat/useChat";
 import ChatHeader from "./chat/ChatHeader";
@@ -27,6 +26,8 @@ const ChatInterface = () => {
           onSelect={chat.handleSelectConversation}
           onNewChat={chat.handleNewChat}
           onDelete={chat.handleDeleteConversation}
+          loadError={chat.conversationsError}
+          onRetry={chat.retryLoadConversations}
         />
 
         <div className="chat-container">
@@ -47,7 +48,9 @@ const ChatInterface = () => {
             onChange={chat.setInput}
             onKeyDown={chat.handleKeyPress}
             onSend={chat.handleSend}
-            disabled={!chat.input.trim() || chat.isBusy}
+            disabled={
+              !chat.input.trim() || chat.isBusy || chat.isLoadingHistory
+            }
             inputRef={chat.inputRef}
           />
         </div>

@@ -96,11 +96,6 @@ describe("api service", () => {
       expect(localStorage.getItem("authToken")).toBeNull();
     });
 
-    it("getAuthToken returns the stored token or null", () => {
-      expect(api.getAuthToken()).toBeNull();
-      localStorage.setItem("authToken", "tok-3");
-      expect(api.getAuthToken()).toBe("tok-3");
-    });
   });
 
   describe("login / signup / logout", () => {
@@ -245,18 +240,6 @@ describe("api service", () => {
       expect(data).toEqual({ _id: "c2" });
     });
 
-    it("addMessageToConversation POSTs to the messages sub-resource", async () => {
-      axiosInstance.post.mockResolvedValue({ data: { _id: "m1" } });
-      await api.addMessageToConversation("c1", {
-        role: "user",
-        content: "hi",
-      });
-      expect(axiosInstance.post).toHaveBeenCalledWith(
-        "/chat/conversations/c1/messages",
-        { role: "user", content: "hi" }
-      );
-    });
-
     it("deleteConversation DELETEs the conversation resource", async () => {
       axiosInstance.delete.mockResolvedValue({ data: { message: "deleted" } });
       await api.deleteConversation("c1");
@@ -274,11 +257,13 @@ describe("api service", () => {
       const data = await api.uploadDocument(file);
 
       expect(axiosInstance.post).toHaveBeenCalledTimes(1);
-      const [url, body, config] = axiosInstance.post.mock.calls[0];
+      const [url, body] = axiosInstance.post.mock.calls[0];
       expect(url).toBe("/upload");
       expect(body).toBeInstanceOf(FormData);
       expect(body.get("pdf")).toBe(file);
-      expect(config.headers["Content-Type"]).toBe("multipart/form-data");
+      // No manual Content-Type header — axios derives the multipart
+      // boundary itself when handed FormData.
+      expect(axiosInstance.post.mock.calls[0]).toHaveLength(2);
       expect(data).toEqual({ filename: "doc.pdf" });
     });
 

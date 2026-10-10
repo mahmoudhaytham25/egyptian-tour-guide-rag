@@ -1,6 +1,7 @@
 // src/pages/Documents.jsx
-import React, { useState } from 'react';
-import api from '../services/api';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { logout } from '../utils/logout';
 import DocumentUploader from '../components/DocumentUploader';
 import DocumentManager from '../components/DocumentManager';
 import pyramids from '../Assets/Images/Pyramids.png';
@@ -15,19 +16,14 @@ const Documents = () => {
     setRefreshDocuments(prev => prev + 1);
   };
 
-  const handleLogout = () => {
-    api.logout();
-    window.location.href = '/';
-  };
-
   return (
     <div className="documents-page">
       <img src={pyramids} alt="" className="imgCover" />
       <div className="bg-overlay" aria-hidden="true" />
 
       <nav className="page-nav">
-        <a href="/chat" className="page-nav-back">← Back to chat</a>
-        <button type="button" className="page-nav-button" onClick={handleLogout}>
+        <Link to="/chat" className="page-nav-back">← Back to chat</Link>
+        <button type="button" className="page-nav-button" onClick={logout}>
           Logout
         </button>
       </nav>

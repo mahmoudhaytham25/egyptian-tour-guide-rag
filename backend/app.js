@@ -38,8 +38,8 @@ function createApp() {
     .filter(Boolean);
   app.use(cors({ origin: origins }));
 
+  // Bodies are JSON (express.json) or multipart (multer) — no urlencoded.
   app.use(express.json({ limit: '1mb' }));
-  app.use(express.urlencoded({ extended: true }));
 
   // Tight limiter on the credential endpoints (brute-force surface).
   const authLimiter = rateLimit({

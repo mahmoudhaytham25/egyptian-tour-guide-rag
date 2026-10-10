@@ -19,8 +19,10 @@ module.exports = async (req, res, next) => {
       algorithms: ['HS256']
     });
 
-    // Find user by ID (token may be valid for a since-deleted account)
-    const user = await User.findById(decoded.id);
+    // Find user by ID (token may be valid for a since-deleted account).
+    // Fresh DB hit every request, but only the email column is hydrated —
+    // the password hash never enters the request lifecycle.
+    const user = await User.findById(decoded.id).select('email').lean();
     if (!user) {
       throw new HttpError(401, 'User not found');
     }

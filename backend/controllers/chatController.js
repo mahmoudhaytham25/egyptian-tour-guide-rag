@@ -1,13 +1,15 @@
 const mongoose = require('mongoose');
 const Conversation = require('../models/conversation');
 const Message = require('../models/message');
+const { VALID_ROLES } = Message;
 const { HttpError } = require('../middleware/errors');
 
-const VALID_ROLES = ['user', 'assistant'];
 const MAX_TITLE_LENGTH = 200;
 const MAX_MESSAGE_LENGTH = 4000;
+const MAX_METADATA_BYTES = 8 * 1024;
 const CONVERSATIONS_LIMIT = 50;
 const MESSAGES_LIMIT = 200;
+const FORBIDDEN_METADATA_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function assertValidConversationId(id) {
   if (!mongoose.isValidObjectId(id)) {
@@ -28,18 +30,29 @@ function validateContent(content) {
   }
 }
 
-// Whitelist the metadata field: only a plain object is stored, nothing else
-// from the request body reaches the model (no mass-assignment).
+// Whitelist the metadata field: only a plain, bounded object with safe keys
+// is stored — dotted/$-prefixed/prototype-polluting keys and oversized blobs
+// are rejected here instead of blowing up at insert time.
 function sanitizeMetadata(metadata) {
-  if (metadata !== undefined &&
-      (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata))) {
+  if (metadata === undefined) {
+    return {};
+  }
+  if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
     throw new HttpError(400, 'Metadata must be an object');
   }
-  return metadata || {};
+  for (const key of Object.keys(metadata)) {
+    if (key.includes('.') || key.startsWith('$') || FORBIDDEN_METADATA_KEYS.has(key)) {
+      throw new HttpError(400, `Metadata key "${key}" is not allowed`);
+    }
+  }
+  if (JSON.stringify(metadata).length > MAX_METADATA_BYTES) {
+    throw new HttpError(400, `Metadata is too large (max ${MAX_METADATA_BYTES} bytes)`);
+  }
+  return metadata;
 }
 
 async function findOwnedConversation(id, userId) {
-  const conversation = await Conversation.findOne({ _id: id, userId });
+  const conversation = await Conversation.findOne({ _id: id, userId, isActive: true });
   if (!conversation) {
     throw new HttpError(404, 'Conversation not found');
   }
@@ -54,9 +67,15 @@ exports.createConversation = async (req, res) => {
     validateContent(message);
   }
 
+  // Derive the title up front — one conversation save, one message save.
+  const derivedTitle = (title && title.trim()) ||
+    (message
+      ? message.substring(0, 30) + (message.length > 30 ? '...' : '')
+      : 'New Conversation');
+
   const conversation = new Conversation({
     userId: req.userId,
-    title: (title && title.trim()) || 'New Conversation'
+    title: derivedTitle
   });
   await conversation.save();
 
@@ -68,12 +87,6 @@ exports.createConversation = async (req, res) => {
       content: message
     });
     await initialMessage.save();
-
-    // Update title with first few words of the message if no title provided
-    if (!title) {
-      conversation.title = message.substring(0, 30) + (message.length > 30 ? '...' : '');
-      await conversation.save();
-    }
   }
 
   res.status(201).json(conversation);
@@ -94,12 +107,16 @@ exports.getConversations = async (req, res) => {
 // Get a specific conversation with its messages
 exports.getConversation = async (req, res) => {
   assertValidConversationId(req.params.id);
-  const conversation = await findOwnedConversation(req.params.id, req.userId);
 
-  // Fetch the most recent messages, then present oldest-first for display.
-  const messages = await Message.find({ conversationId: conversation._id })
-    .sort({ timestamp: -1 })
-    .limit(MESSAGES_LIMIT);
+  // Fetch conversation and messages in parallel — the message query is
+  // scoped by the same id; a foreign/missing conversation still 404s below.
+  const [conversation, messages] = await Promise.all([
+    findOwnedConversation(req.params.id, req.userId),
+    // Fetch the most recent messages, then present oldest-first for display.
+    Message.find({ conversationId: req.params.id })
+      .sort({ timestamp: -1 })
+      .limit(MESSAGES_LIMIT)
+  ]);
   messages.reverse();
 
   res.status(200).json({
@@ -130,9 +147,12 @@ exports.addMessage = async (req, res) => {
   });
   await message.save();
 
-  // Update conversation timestamp
-  conversation.updatedAt = Date.now();
-  await conversation.save();
+  // Bump the conversation timestamp only — updateOne skips the pre-save
+  // hook, so the $set is explicit.
+  await Conversation.updateOne(
+    { _id: conversation._id },
+    { $set: { updatedAt: new Date() } }
+  );
 
   res.status(201).json(message);
 };
@@ -142,14 +162,14 @@ exports.updateConversation = async (req, res) => {
   assertValidConversationId(req.params.id);
   const title = (req.body || {}).title;
   validateTitle(title);
+  if (typeof title !== 'string' || !title.trim()) {
+    throw new HttpError(400, 'A non-empty title is required');
+  }
 
   const conversation = await findOwnedConversation(req.params.id, req.userId);
 
-  if (title) {
-    conversation.title = title.trim();
-  }
-  conversation.updatedAt = Date.now();
-  await conversation.save();
+  conversation.title = title.trim();
+  await conversation.save(); // pre-save hook bumps updatedAt
 
   res.status(200).json(conversation);
 };

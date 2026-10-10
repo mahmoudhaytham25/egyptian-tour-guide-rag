@@ -1,8 +1,10 @@
 const mongoose = require('mongoose');
 
+const VALID_ROLES = ['user', 'assistant'];
+
 const messageSchema = new mongoose.Schema({
   conversationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true },
-  role: { type: String, enum: ['user', 'assistant'], required: true },
+  role: { type: String, enum: VALID_ROLES, required: true },
   content: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
   // Optional: add metadata for RAG sources if needed
@@ -10,3 +12,4 @@ const messageSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('Message', messageSchema);
+module.exports.VALID_ROLES = VALID_ROLES;

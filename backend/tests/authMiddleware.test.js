@@ -2,8 +2,6 @@
  * Tests for middleware/auth.js — exercised through protected routes on both
  * /api/* (routes/api.js) and /api/chat/* (routes/chat.js).
  */
-process.env.JWT_SECRET = 'test-jwt-secret';
-
 const jwt = require('jsonwebtoken');
 const request = require('supertest');
 
@@ -13,17 +11,15 @@ jest.mock('../models/message', () => require('./mockFactories').makeMessageModel
 
 const User = require('../models/user');
 const Conversation = require('../models/conversation');
-const { buildApp, authHeader } = require('./helpers');
+const { buildApp, authHeader, sortedLimited, mockAuthUser } = require('./helpers');
 
 const app = buildApp();
 
 beforeEach(() => {
   jest.clearAllMocks();
   // Default: authenticated user exists
-  User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
-  Conversation.find.mockReturnValue({
-    sort: jest.fn().mockReturnValue({ limit: jest.fn().mockResolvedValue([]) })
-  });
+  mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+  Conversation.find.mockReturnValue(sortedLimited([]));
 });
 
 describe('auth middleware — /api/chat/* routes', () => {
@@ -58,7 +54,7 @@ describe('auth middleware — /api/chat/* routes', () => {
   });
 
   test('valid token but user no longer exists → 401', async () => {
-    User.findById.mockResolvedValue(null);
+    mockAuthUser(null);
     const res = await request(app)
       .get('/api/chat/conversations')
       .set('Authorization', authHeader());

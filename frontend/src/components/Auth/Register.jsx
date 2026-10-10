@@ -1,9 +1,10 @@
 // src/components/auth/Register.jsx
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import "./Auth.css";
-import icon from "../../Assets/Images/pharaoh-icon.png";
+import AuthCard from "./AuthCard";
+import authError from "./authError";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -62,74 +63,67 @@ const Register = () => {
          so there is nothing else to provision — go straight to chat. */
       navigate("/chat");
     } catch (err) {
-      setErrorMessage(
-        err.response?.data?.message ||
-          (err.request
-            ? "Network error. Please check your connection and try again."
-            : "Registration failed. Please try again.")
-      );
+      setErrorMessage(authError(err, "Registration failed. Please try again."));
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-brand">
-          <img src={icon} alt="" className="auth-brand-icon" />
-          <h1 className="auth-brand-title">Egyptian Tour Guide</h1>
-          <p className="auth-brand-sub">
-            Create an account to start exploring ancient Egypt with your AI
-            guide.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="auth-form signupForm">
-          <h2>Create your account</h2>
-          {errorMessage && (
-            <div className="auth-error" role="alert">
-              {errorMessage}
-            </div>
-          )}
-          <input
-            className="auth-input"
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            className="auth-input"
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={MIN_PASSWORD_LENGTH}
-            required
-          />
-          <input
-            id="confirmPassword"
-            className={`auth-input ${confirmClass}`}
-            type="password"
-            placeholder="Confirm Password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            required
-          />
-          {confirmTouched && !passwordsMatch && (
-            <p className="auth-field-error">Passwords do not match.</p>
-          )}
-          <button type="submit" className="auth-submit" disabled={submitting}>
-            {submitting ? "Registering..." : "Register"}
-          </button>
-          <p className="auth-switch">
-            Already have an account? <Link to="/">Login here</Link>
-          </p>
-        </form>
-      </div>
-    </div>
+    <AuthCard
+      title="Egyptian Tour Guide"
+      sub="Create an account to start exploring ancient Egypt with your AI guide."
+    >
+      {/* `signupForm` has no CSS rule — it's a hook so tests can grab the
+          form element and submit it programmatically (bypassing native
+          constraint validation). */}
+      <form onSubmit={handleSubmit} className="auth-form signupForm">
+        <h2>Create your account</h2>
+        {errorMessage && (
+          <div className="auth-error" role="alert">
+            {errorMessage}
+          </div>
+        )}
+        <input
+          className="auth-input"
+          type="email"
+          placeholder="Email"
+          aria-label="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        <input
+          className="auth-input"
+          type="password"
+          placeholder="Password"
+          aria-label="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          minLength={MIN_PASSWORD_LENGTH}
+          required
+        />
+        <input
+          id="confirmPassword"
+          className={`auth-input ${confirmClass}`}
+          type="password"
+          placeholder="Confirm Password"
+          aria-label="Confirm Password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          required
+        />
+        {confirmTouched && !passwordsMatch && (
+          <p className="auth-field-error">Passwords do not match.</p>
+        )}
+        <button type="submit" className="auth-submit" disabled={submitting}>
+          {submitting ? "Registering..." : "Register"}
+        </button>
+        <p className="auth-switch">
+          Already have an account? <Link to="/">Login here</Link>
+        </p>
+      </form>
+    </AuthCard>
   );
 };
 

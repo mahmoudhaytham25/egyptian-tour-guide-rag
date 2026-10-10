@@ -2,5 +2,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+.env.example
+requirements-dev.txt
+pytest.ini
 tests/
+docs/
 vector_store/

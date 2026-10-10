@@ -3,3 +3,9 @@ dist/
 .env
 .env.local
 npm-debug.log*
+
+# Test assets — never reach dist/, just bloat the build context
+e2e/
+playwright.config.js
+test-results/
+*.test.*

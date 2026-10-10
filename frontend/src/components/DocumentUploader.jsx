@@ -1,5 +1,5 @@
 // src/components/DocumentUploader.jsx
-import React, { useState } from 'react';
+import { useRef, useState } from 'react';
 import api from '../services/api';
 
 const DocumentUploader = ({ onDocumentUploaded }) => {
@@ -7,6 +7,7 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0] || null);
@@ -42,6 +43,11 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
     } finally {
       setUploading(false);
       setFile(null);
+      // The input is uncontrolled — clear its value too so re-selecting
+      // the same file fires a fresh change event.
+      if (inputRef.current) {
+        inputRef.current.value = '';
+      }
     }
   };
 
@@ -59,6 +65,7 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
           onDrop={handleDrop}
         >
           <input
+            ref={inputRef}
             type="file"
             accept=".pdf"
             onChange={handleFileChange}

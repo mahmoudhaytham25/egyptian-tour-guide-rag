@@ -9,9 +9,9 @@
 .chat-layout {
   display: flex;
   gap: 18px;
-  /* width:100% is required — with width:auto + auto margins inside the
-     column-flex .home-container, the layout shrinks to fit-content and
-     grows as messages arrive. Definite width keeps it stable. */
+  /* width:100% is required — with width:auto + auto margins inside a
+     column-flex parent, the layout shrinks to fit-content and grows as
+     messages arrive. Definite width keeps it stable. */
   width: 100%;
   max-width: 1500px;
   margin: 0 auto;
@@ -45,7 +45,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 14px 20px;
-  background: linear-gradient(135deg, #242842 0%, #3a3f66 100%);
+  background: linear-gradient(135deg, var(--ink) 0%, #3a3f66 100%);
   color: #f5f3ea;
   border-bottom: 1px solid rgba(212, 175, 55, 0.35);
 }
@@ -62,7 +62,7 @@
   height: 40px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
-  border: 2px solid #d4af37;
+  border: 2px solid var(--gold);
   padding: 2px;
   object-fit: cover;
   flex-shrink: 0;
@@ -70,7 +70,7 @@
 
 .chat-header-text h2 {
   margin: 0;
-  font-family: "Cinzel", Georgia, "Times New Roman", serif;
+  font-family: var(--font-display);
   font-size: 1.3rem;
   font-weight: 700;
   letter-spacing: 0.4px;
@@ -82,7 +82,7 @@
 .chat-header-text p {
   margin: 2px 0 0;
   font-size: 0.75rem;
-  color: #cdbf8f;
+  color: var(--sand);
   letter-spacing: 0.6px;
   text-transform: uppercase;
 }
@@ -95,7 +95,7 @@
 }
 
 .chat-nav-link {
-  color: #e9e5d5;
+  color: var(--cream);
   text-decoration: none;
   font-size: 0.82rem;
   font-weight: 600;
@@ -108,14 +108,14 @@
 
 .chat-nav-link:hover {
   background: rgba(212, 175, 55, 0.18);
-  border-color: #d4af37;
+  border-color: var(--gold);
   color: #fff;
 }
 
 .logout-button {
   flex-shrink: 0;
   background: transparent;
-  color: #e9e5d5;
+  color: var(--cream);
   border: 1px solid rgba(255, 255, 255, 0.35);
   padding: 7px 14px;
   border-radius: 10px;
@@ -127,7 +127,7 @@
 
 .logout-button:hover {
   background: rgba(212, 175, 55, 0.18);
-  border-color: #d4af37;
+  border-color: var(--gold);
   color: #fff;
 }
 
@@ -175,8 +175,8 @@
 }
 
 .user-avatar {
-  background: linear-gradient(135deg, #d4af37, #b8901f);
-  color: #242842;
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
+  color: var(--ink);
   order: 2;
 }
 
@@ -204,7 +204,7 @@
 
 .message.user {
   order: 1;
-  background: linear-gradient(135deg, #333a68 0%, #46497a 100%);
+  background: linear-gradient(135deg, var(--slate) 0%, #46497a 100%);
   color: #f4f4f8;
   border-bottom-right-radius: 4px;
 }
@@ -212,7 +212,7 @@
 .message.bot {
   order: 2;
   background: #ffffff;
-  color: #2b2e42;
+  color: var(--card);
   border: 1px solid rgba(36, 40, 66, 0.08);
   border-bottom-left-radius: 4px;
 }
@@ -269,7 +269,7 @@
 
 .suggestion-button:hover:not(:disabled) {
   background: rgba(212, 175, 55, 0.16);
-  border-color: #b8901f;
+  border-color: var(--gold-deep);
   transform: translateY(-1px);
   box-shadow: 0 3px 8px rgba(80, 65, 20, 0.18);
 }
@@ -301,7 +301,7 @@
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  border: 2px solid #d4af37;
+  border: 2px solid var(--gold);
   padding: 4px;
   object-fit: cover;
   margin-bottom: 10px;
@@ -309,8 +309,8 @@
 
 .welcome-message h3 {
   margin: 0 0 8px;
-  font-family: "Cinzel", Georgia, serif;
-  color: #333a68;
+  font-family: var(--font-display);
+  color: var(--slate);
 }
 
 .welcome-message p {
@@ -373,7 +373,7 @@
 }
 
 .chat-input-wrapper:focus-within {
-  border-color: #d4af37;
+  border-color: var(--gold);
   box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.22);
 }
 
@@ -386,20 +386,21 @@
   line-height: 1.4;
   width: 100%;
   outline: none;
-  color: #2b2e42;
+  color: var(--card);
   /* The field is a <textarea> so Shift+Enter can add line breaks */
   font-family: inherit;
   resize: none;
+  /* Keep in sync with MAX_TEXTAREA_HEIGHT = 132 in ChatInput.jsx */
   max-height: 132px;
 }
 
 .chat-input::placeholder {
-  color: #9a9db2;
+  color: var(--muted-light);
 }
 
 .send-button {
-  background: linear-gradient(135deg, #d4af37, #b8901f);
-  color: #242842;
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
+  color: var(--ink);
   border: none;
   border-radius: 50%;
   width: 40px;
@@ -413,7 +414,7 @@
 }
 
 .send-button:hover:not(:disabled) {
-  background: linear-gradient(135deg, #e0be45, #c29a22);
+  background: linear-gradient(135deg, var(--gold-hover), var(--gold-hover-deep));
   transform: translateX(2px);
   box-shadow: 0 4px 10px rgba(140, 109, 31, 0.35);
 }
@@ -424,7 +425,7 @@
 
 .send-button:disabled {
   background: #d7d9e3;
-  color: #8a8da3;
+  color: var(--muted);
   cursor: not-allowed;
 }
 
@@ -437,7 +438,7 @@
 
 .input-hint {
   font-size: 0.72rem;
-  color: #9a9db2;
+  color: var(--muted-light);
 }
 
 /* ------------------------------------------------------------------ */
@@ -476,8 +477,8 @@
   padding: 11px;
   border: none;
   border-radius: 12px;
-  background: linear-gradient(135deg, #d4af37, #b8901f);
-  color: #242842;
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
+  color: var(--ink);
   font-size: 0.88rem;
   font-weight: 600;
   font-family: inherit;
@@ -486,7 +487,7 @@
 }
 
 .new-chat-button:hover {
-  background: linear-gradient(135deg, #e0be45, #c29a22);
+  background: linear-gradient(135deg, var(--gold-hover), var(--gold-hover-deep));
   box-shadow: 0 4px 12px rgba(140, 109, 31, 0.4);
 }
 
@@ -513,14 +514,35 @@
 }
 
 .conversation-item:hover,
-.conversation-item:focus-visible {
+.conversation-item:focus-within {
   background: rgba(255, 255, 255, 0.07);
-  outline: none;
 }
 
 .conversation-item.active {
   background: rgba(212, 175, 55, 0.16);
-  border-left-color: #d4af37;
+  border-left-color: var(--gold);
+}
+
+/* The row's main click target is a real <button> (the row itself is a plain
+   div) so Enter/Space activation works without a role="button" wrapper. */
+.conversation-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.conversation-item-main:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
 }
 
 .conversation-item-text {
@@ -576,6 +598,36 @@
   font-size: 0.75rem;
   color: #767ca0;
   margin-top: 6px !important;
+}
+
+/* Sidebar load-failure state (non-404) with a retry affordance. */
+.conversation-error {
+  padding: 28px 16px;
+  text-align: center;
+  color: #9aa0c0;
+  font-size: 0.85rem;
+}
+
+.conversation-error p {
+  margin: 0 0 12px;
+}
+
+.conversation-retry {
+  padding: 7px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(212, 175, 55, 0.5);
+  background: transparent;
+  color: var(--sand);
+  font-size: 0.82rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.conversation-retry:hover {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: var(--gold);
+  color: #fff;
 }
 
 /* ------------------------------------------------------------------ */

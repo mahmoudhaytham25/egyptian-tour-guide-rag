@@ -42,6 +42,8 @@ export const formatMessageTime = (value) => {
 };
 
 // Pull the answer text out of whatever /query (or a fallback) returned.
+// Anything unrecognized falls back to the generic error string — never
+// render raw JSON into a chat bubble.
 export const extractAnswerText = (response) => {
   if (typeof response === "string") {
     return response;
@@ -49,9 +51,8 @@ export const extractAnswerText = (response) => {
   if (response && typeof response === "object") {
     if (typeof response.answer === "string") return response.answer;
     if (typeof response.response === "string") return response.response;
-    return JSON.stringify(response);
   }
-  return String(response);
+  return GENERIC_ERROR_MESSAGE;
 };
 
 // Detect vague questions and provide suggestions instead of querying.

@@ -1,10 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-// Home pulls in the whole chat + documents stack; the routing assertions
-// only need to know whether the guarded page rendered.
-vi.mock('./pages/Home', () => ({
-  default: () => <div>Home Page</div>,
+// The Chat page pulls in the whole chat + documents stack; the routing
+// assertions only need to know whether the guarded page rendered.
+vi.mock('./pages/Chat', () => ({
+  default: () => <div>Chat Page</div>,
 }));
 
 const makeJwt = (payload) => {
@@ -52,16 +52,16 @@ test('redirects the legacy /home route through the auth guard', () => {
   expect(screen.getByRole('heading', { name: /sign in/i })).toBeInTheDocument();
 });
 
-test('renders Home at /chat with a valid token', () => {
+test('renders the chat page at /chat with a valid token', () => {
   localStorage.setItem('authToken', makeJwt({ id: 'u1', exp: futureExp() }));
   renderAt('/chat');
-  expect(screen.getByText('Home Page')).toBeInTheDocument();
+  expect(screen.getByText('Chat Page')).toBeInTheDocument();
 });
 
 test('redirects /home to /chat for an authenticated user', () => {
   localStorage.setItem('authToken', makeJwt({ id: 'u1', exp: futureExp() }));
   renderAt('/home');
-  expect(screen.getByText('Home Page')).toBeInTheDocument();
+  expect(screen.getByText('Chat Page')).toBeInTheDocument();
 });
 
 test('sends unknown paths back to sign-in', () => {

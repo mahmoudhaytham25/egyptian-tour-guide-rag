@@ -6,12 +6,16 @@ const Message = require('../models/message');
 const Conversation = require('../models/conversation');
 const modelServer = require('../config/modelServer');
 const { HttpError } = require('../middleware/errors');
+const { DATA_DIR, VECTOR_STORE_DIR } = require('../config/paths');
 
 const QUERY_TIMEOUT_MS = 120000; // LLM calls can be slow — 2 min, never hang
-// Indexing a large PDF can legitimately take a long time, but the request
-// must still be finite — cap it at 30 minutes.
-const INDEX_TIMEOUT_MS = 30 * 60 * 1000;
+// POST /index on the model server returns 202 immediately (indexing runs
+// async there), so a short timeout is enough — it only bounds the handshake.
+const INDEX_TIMEOUT_MS = 10000;
+const INDEX_STATUS_TIMEOUT_MS = 5000;
 const MAX_QUERY_LENGTH = 2000;
+const DEFAULT_DOCUMENT = 'egyptian_history';
+const SAFE_BASENAME_RE = /^(?=.*[A-Za-z0-9])[A-Za-z0-9._-]+$/;
 
 // Indexing status is process-global on purpose: this deployment runs a single
 // backend instance against a single model server, so one shared status object
@@ -23,11 +27,18 @@ let indexingStatus = {
   error: null,
   message: null,
   lastIndexed: null,
-  currentFile: null
+  currentFile: null,
+  jobId: null
 };
 
-const DATA_DIR = path.join(__dirname, '../../model-server/data');
-const VECTOR_STORE_DIR = path.join(__dirname, '../../model-server/vector_store');
+function safePdfFilename(filename) {
+  const base = path.basename(String(filename));
+  if (base !== filename || !SAFE_BASENAME_RE.test(base) ||
+      !base.toLowerCase().endsWith('.pdf')) {
+    return null;
+  }
+  return base;
+}
 
 exports.uploadPdf = (req, res) => {
   if (!req.file) {
@@ -37,17 +48,20 @@ exports.uploadPdf = (req, res) => {
   // Log identifiers/sizes only — not the raw file object.
   console.log(`Upload saved: ${req.file.filename} (${req.file.size} bytes)`);
 
-  // Check if there's existing metadata for this file and remove it
-  // to ensure it shows up as unindexed
-  const baseFileName = req.file.filename.replace('.pdf', '');
+  // Remove any existing index artifacts for this file so a re-upload shows
+  // up as unindexed and a stale index can't keep serving old answers.
+  const baseFileName = path.basename(req.file.filename, path.extname(req.file.filename));
   const metadataPath = path.join(VECTOR_STORE_DIR, `${baseFileName}_metadata.json`);
+  const vectorsPath = path.join(VECTOR_STORE_DIR, `${baseFileName}_vectors.npz`);
 
-  if (fs.existsSync(metadataPath)) {
-    try {
-      fs.unlinkSync(metadataPath);
-      console.log(`Deleted existing metadata file for ${baseFileName} to mark as unindexed`);
-    } catch (err) {
-      console.warn(`Warning: Could not delete metadata file ${metadataPath}:`, err.message);
+  for (const artifact of [metadataPath, vectorsPath]) {
+    if (fs.existsSync(artifact)) {
+      try {
+        fs.unlinkSync(artifact);
+        console.log(`Deleted existing index artifact ${path.basename(artifact)} for ${baseFileName}`);
+      } catch (err) {
+        console.warn(`Warning: Could not delete index artifact ${artifact}:`, err.message);
+      }
     }
   }
 
@@ -59,8 +73,10 @@ exports.uploadPdf = (req, res) => {
   });
 };
 
-// Index the document
-exports.indexDocument = (req, res) => {
+// Index the document — the model server runs indexing asynchronously and
+// answers 202 { job_id, filename, status: 'indexing' } immediately; the
+// frontend tracks progress via GET /api/indexing-status.
+exports.indexDocument = async (req, res) => {
   if (indexingStatus.isIndexing) {
     throw new HttpError(409, 'Indexing already in progress');
   }
@@ -72,8 +88,8 @@ exports.indexDocument = (req, res) => {
   }
 
   // Sanitize filename to prevent path traversal and ensure it's a PDF
-  const safeFilename = path.basename(filename);
-  if (safeFilename !== filename || !safeFilename.toLowerCase().endsWith('.pdf')) {
+  const safeFilename = safePdfFilename(filename);
+  if (!safeFilename) {
     throw new HttpError(400, 'Invalid filename. Only PDF files in the data directory are allowed.');
   }
 
@@ -82,53 +98,112 @@ exports.indexDocument = (req, res) => {
     throw new HttpError(404, `PDF file ${filename} not found. Please upload the file first.`);
   }
 
+  let response;
+  try {
+    response = await modelServer.post(
+      '/index',
+      { filename: safeFilename },
+      { timeout: INDEX_TIMEOUT_MS }
+    );
+  } catch (error) {
+    // Surface the model server's own client errors (400/404/409); anything
+    // else is an upstream failure.
+    const detail =
+      (error.response && error.response.data &&
+        (error.response.data.error || error.response.data.message)) ||
+      error.message;
+    const status = error.response && error.response.status;
+    if (status === 409) {
+      // A job is already running over there — reflect it locally.
+      indexingStatus.isIndexing = true;
+      throw new HttpError(409, String(detail));
+    }
+    if (status && status < 500) {
+      throw new HttpError(status, String(detail));
+    }
+    if (!error.response) {
+      throw new HttpError(502, 'Model server is unreachable');
+    }
+    throw new HttpError(502, `Indexing failed on model server: ${detail}`);
+  }
+
+  if (response.data && response.data.success === false) {
+    throw new HttpError(502, String(response.data.error || 'Indexing failed on model server'));
+  }
+
+  console.log(`Indexing of ${safeFilename} started on model server`);
+
   indexingStatus = {
     isIndexing: true,
     progress: 0,
     error: null,
     message: null,
     lastIndexed: null,
-    currentFile: filename
+    currentFile: safeFilename,
+    jobId: (response.data && response.data.job_id) || null
   };
-
-  console.log(`Starting indexing for ${filename} via model server`);
-
-  // Kick off indexing on the model server, which runs the indexer in-process
-  // at POST /index. The request resolves only when indexing finishes (or
-  // fails), so indexingStatus reflects the outcome — and isIndexing always
-  // resets via .finally(), even on unexpected rejection shapes.
-  modelServer
-    .post('/index', { filename: safeFilename }, { timeout: INDEX_TIMEOUT_MS })
-    .then((response) => {
-      console.log(`Indexing of ${filename} completed on model server`);
-      indexingStatus.progress = 100;
-      indexingStatus.lastIndexed = new Date().toISOString();
-      indexingStatus.message =
-        (response.data && response.data.message) ||
-        `Indexing of ${filename} completed successfully`;
-      indexingStatus.error = null;
-    })
-    .catch((error) => {
-      console.error(`Indexing of ${filename} failed:`, error.message);
-      const detail =
-        (error.response && error.response.data &&
-          (error.response.data.message || error.response.data.error)) ||
-        error.message;
-      indexingStatus.error = `Indexing failed on model server: ${detail}`;
-    })
-    .finally(() => {
-      indexingStatus.isIndexing = false;
-    });
 
   res.status(202).json({
     success: true,
-    message: `Indexing started for ${filename}`,
+    ...(response.data || {}),
     status: indexingStatus
   });
 };
 
-// Check indexing status
-exports.getIndexingStatus = (req, res) => {
+// Merge the model server's single-job status into the shared indexingStatus.
+async function pollModelServerIndexStatus() {
+  try {
+    const { data } = await modelServer.get('/index/status', {
+      timeout: INDEX_STATUS_TIMEOUT_MS
+    });
+    if (!data || !data.status) {
+      return;
+    }
+    switch (data.status) {
+      case 'indexing':
+        indexingStatus.isIndexing = true;
+        indexingStatus.jobId = data.job_id || indexingStatus.jobId;
+        indexingStatus.currentFile = data.filename || indexingStatus.currentFile;
+        indexingStatus.error = null;
+        break;
+      case 'done': {
+        const isNew = indexingStatus.isIndexing ||
+          (data.job_id && indexingStatus.jobId !== data.job_id);
+        indexingStatus.isIndexing = false;
+        indexingStatus.jobId = data.job_id || indexingStatus.jobId;
+        indexingStatus.currentFile = data.filename || indexingStatus.currentFile;
+        indexingStatus.progress = 100;
+        indexingStatus.error = null;
+        indexingStatus.message = `Indexing of ${indexingStatus.currentFile} completed successfully`;
+        if (isNew || !indexingStatus.lastIndexed) {
+          indexingStatus.lastIndexed = new Date().toISOString();
+        }
+        break;
+      }
+      case 'error':
+        indexingStatus.isIndexing = false;
+        indexingStatus.jobId = data.job_id || indexingStatus.jobId;
+        indexingStatus.currentFile = data.filename || indexingStatus.currentFile;
+        indexingStatus.error =
+          data.error || 'Indexing failed on model server';
+        break;
+      case 'idle':
+        indexingStatus.isIndexing = false;
+        break;
+      default:
+        break;
+    }
+  } catch (error) {
+    // A failed poll must not break the status endpoint — report the last
+    // known state instead.
+    console.warn('Could not poll model-server indexing status:', error.message);
+  }
+}
+
+// Check indexing status — lazily polls the model server on each request (no
+// background loop; the frontend polls this endpoint while indexing).
+exports.getIndexingStatus = async (req, res) => {
+  await pollModelServerIndexStatus();
   res.status(200).json({
     success: true,
     status: indexingStatus
@@ -149,36 +224,47 @@ exports.queryRag = async (req, res) => {
     throw new HttpError(400, `Question is too long (max ${MAX_QUERY_LENGTH} characters)`);
   }
 
+  // Optional target document — a safe PDF basename without the extension.
+  let documentName = DEFAULT_DOCUMENT;
+  if (body.document !== undefined && body.document !== null) {
+    const doc = path.basename(String(body.document));
+    if (doc !== String(body.document) || !SAFE_BASENAME_RE.test(doc)) {
+      throw new HttpError(400, 'Invalid document name');
+    }
+    documentName = doc.replace(/\.pdf$/i, '');
+  }
+
   // Log the length, not the raw query text — questions may contain PII.
   console.log(`RAG query received (length=${queryText.length})`);
 
-  // Verify the conversation exists and belongs to the authenticated user
-  if (conversationId) {
-    const conversation = mongoose.isValidObjectId(conversationId)
-      ? await Conversation.findById(conversationId)
-      : null;
-
-    if (!conversation) {
-      throw new HttpError(404, 'Conversation not found');
-    }
-    if (String(conversation.userId) !== String(req.userId)) {
-      throw new HttpError(403, 'You do not have access to this conversation');
-    }
-  }
-
+  // Verify the conversation exists, is active, and belongs to the
+  // authenticated user (the filter covers ownership — no separate check).
+  let conversation = null;
   let chatHistory = [];
   if (conversationId) {
-    try {
-      const messages = await Message.find({ conversationId })
+    if (!mongoose.isValidObjectId(conversationId)) {
+      throw new HttpError(404, 'Conversation not found');
+    }
+    const historyPromise = Promise.resolve()
+      .then(() => Message.find({ conversationId })
         .sort({ timestamp: -1 })
-        .limit(10);
-
-      chatHistory = messages.reverse().map((msg) => ({
-        role: msg.role,
-        content: msg.content
-      }));
-    } catch (error) {
-      console.error('Error fetching chat history:', error.message);
+        .limit(10))
+      .then((messages) =>
+        messages.slice().reverse().map((msg) => ({
+          role: msg.role,
+          content: msg.content
+        }))
+      )
+      .catch((error) => {
+        console.error('Error fetching chat history:', error.message);
+        return [];
+      });
+    [conversation, chatHistory] = await Promise.all([
+      Conversation.findOne({ _id: conversationId, userId: req.userId, isActive: true }),
+      historyPromise
+    ]);
+    if (!conversation) {
+      throw new HttpError(404, 'Conversation not found');
     }
   }
 
@@ -186,7 +272,7 @@ exports.queryRag = async (req, res) => {
   try {
     const modelResponse = await modelServer.post(
       '/query',
-      { query: queryText, top_k: 5, chat_history: chatHistory },
+      { query: queryText, top_k: 5, document: documentName, chat_history: chatHistory },
       { timeout: QUERY_TIMEOUT_MS }
     );
     rawData = modelResponse.data;
@@ -202,8 +288,19 @@ exports.queryRag = async (req, res) => {
     if (!error.response) {
       throw new HttpError(502, 'Model server is unreachable');
     }
-    // Model server responded with an error status — don't leak its body
-    throw new HttpError(502, 'Error generating response from model server');
+    // Model server responded with an error status — surface its error
+    // message when it's a plain string field, never the raw body.
+    const detail = error.response.data && error.response.data.error;
+    throw new HttpError(502, detail || 'Error generating response from model server');
+  }
+
+  // Generation failed upstream — return the error without persisting an
+  // assistant message (no poisoned conversation entries).
+  if (rawData && rawData.success === false) {
+    throw new HttpError(
+      502,
+      String(rawData.error || 'Error generating response from model server')
+    );
   }
 
   let plainTextAnswer = '';
@@ -228,69 +325,64 @@ exports.queryRag = async (req, res) => {
     `Model server answered (answer length=${plainTextAnswer.length}, sources=${sources.length})`
   );
 
-  if (conversationId) {
+  if (conversation) {
     try {
-      const conversation = await Conversation.findById(conversationId);
-      if (!conversation) {
-        console.warn(`Conversation ${conversationId} not found, cannot save messages`);
+      // Only suppress a duplicate when the LATEST message matches — an
+      // identical message from earlier in the conversation must not block
+      // saving a new one.
+      const [lastUserMessage, lastAssistantMessage] = await Promise.all([
+        Message.findOne({ conversationId, role: 'user' }).sort({ timestamp: -1 }),
+        Message.findOne({ conversationId, role: 'assistant' }).sort({ timestamp: -1 })
+      ]);
+
+      if (!lastUserMessage || lastUserMessage.content !== queryText) {
+        await Message.create({
+          conversationId,
+          role: 'user',
+          content: queryText
+        });
       } else {
-        // Only suppress a duplicate when the LATEST message matches — an
-        // identical message from earlier in the conversation must not block
-        // saving a new one.
-        const lastUserMessage = await Message.findOne({
-          conversationId,
-          role: 'user'
-        }).sort({ timestamp: -1 });
-
-        if (!lastUserMessage || lastUserMessage.content !== queryText) {
-          await Message.create({
-            conversationId,
-            role: 'user',
-            content: queryText
-          });
-        } else {
-          console.log('Skipping duplicate user message (matches latest)');
-        }
-
-        const lastAssistantMessage = await Message.findOne({
-          conversationId,
-          role: 'assistant'
-        }).sort({ timestamp: -1 });
-
-        if (!lastAssistantMessage || lastAssistantMessage.content !== plainTextAnswer) {
-          await Message.create({
-            conversationId,
-            role: 'assistant',
-            content: plainTextAnswer,
-            metadata: {
-              sources: sources,
-              enhanced_query: enhancedQuery,
-              original_query: originalQuery
-            }
-          });
-        } else {
-          console.log('Skipping duplicate assistant message (matches latest)');
-        }
-
-        conversation.updatedAt = Date.now();
-        await conversation.save();
+        console.log('Skipping duplicate user message (matches latest)');
       }
+
+      if (!lastAssistantMessage || lastAssistantMessage.content !== plainTextAnswer) {
+        await Message.create({
+          conversationId,
+          role: 'assistant',
+          content: plainTextAnswer,
+          metadata: {
+            sources: sources,
+            enhanced_query: enhancedQuery,
+            original_query: originalQuery,
+            document: documentName
+          }
+        });
+      } else {
+        console.log('Skipping duplicate assistant message (matches latest)');
+      }
+
+      // Only the timestamp changed — updateOne avoids hydrating/saving the
+      // doc; the explicit $set is needed because updateOne skips pre-save hooks.
+      await Conversation.updateOne(
+        { _id: conversation._id },
+        { $set: { updatedAt: new Date() } }
+      );
     } catch (error) {
       console.error('Error saving to conversation history:', error.message);
     }
   }
 
-  const isJsonFormat = req.query.format === 'json' || body.format === 'json';
-  if (isJsonFormat || !req.query.format) {
-    return res.status(200).json({
-      answer: plainTextAnswer,
-      sources: sources,
-      enhanced_query: enhancedQuery,
-      original_query: originalQuery
-    });
+  const format = req.query.format || body.format;
+  if (format === 'text') {
+    res.setHeader('Content-Type', 'text/plain');
+    return res.status(200).send(String(plainTextAnswer));
   }
-  res.setHeader('Content-Type', 'text/plain');
-  return res.status(200).send(String(plainTextAnswer));
+  return res.status(200).json({
+    answer: plainTextAnswer,
+    sources: sources,
+    enhanced_query: enhancedQuery,
+    original_query: originalQuery
+  });
 };
 
 exports.getDocuments = (req, res) => {
@@ -303,22 +395,32 @@ exports.getDocuments = (req, res) => {
   const pdfFiles = fs.readdirSync(DATA_DIR)
     .filter((file) => file.toLowerCase().endsWith('.pdf'));
 
-  // Create a set of indexed document names (without extension)
+  // A document counts as indexed only when BOTH index artifacts exist —
+  // a metadata file without its vectors (or vice versa) is a broken index.
   const indexedDocsSet = new Set();
 
   if (fs.existsSync(VECTOR_STORE_DIR)) {
-    const metadataFiles = fs.readdirSync(VECTOR_STORE_DIR)
-      .filter((file) => file.endsWith('_metadata.json'));
-    metadataFiles.forEach((file) => {
-      indexedDocsSet.add(file.replace('_metadata.json', '').toLowerCase());
+    const metadataBases = fs.readdirSync(VECTOR_STORE_DIR)
+      .filter((file) => file.endsWith('_metadata.json'))
+      .map((file) => file.replace('_metadata.json', ''));
+    metadataBases.forEach((base) => {
+      if (fs.existsSync(path.join(VECTOR_STORE_DIR, `${base}_vectors.npz`))) {
+        indexedDocsSet.add(base.toLowerCase());
+      }
     });
   }
 
   // Map PDF files to document objects — filename/size only, never the
-  // absolute server-side path.
+  // absolute server-side path. A file that disappears between readdir and
+  // stat is skipped rather than 500ing the listing.
   const documents = pdfFiles.map((file) => {
-    const fileName = file.replace('.pdf', '');
-    const stats = fs.statSync(path.join(DATA_DIR, file));
+    const fileName = path.basename(file, path.extname(file));
+    let stats;
+    try {
+      stats = fs.statSync(path.join(DATA_DIR, file));
+    } catch (err) {
+      return null;
+    }
 
     return {
       id: fileName,
@@ -328,7 +430,7 @@ exports.getDocuments = (req, res) => {
       indexed: indexedDocsSet.has(fileName.toLowerCase()),
       size: stats.size
     };
-  });
+  }).filter(Boolean);
 
   console.log(`Listed ${documents.length} documents (${indexedDocsSet.size} indexed)`);
 

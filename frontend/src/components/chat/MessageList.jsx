@@ -1,4 +1,4 @@
-import React from "react";
+import { memo } from "react";
 import icon from "../../Assets/Images/pharaoh-icon.png";
 import ChatMessage from "./ChatMessage";
 import { messageKey } from "./messageUtils";
@@ -15,7 +15,7 @@ const MessageList = ({
   onSuggestionClick,
   messagesEndRef,
 }) => (
-  <div className="chat-messages">
+  <div className="chat-messages" role="log" aria-live="polite">
     {messages.length === 0 && isLoadingHistory && (
       <div className="welcome-message">
         <p>Loading conversation…</p>
@@ -35,7 +35,7 @@ const MessageList = ({
             <button
               key={question}
               type="button"
-              className="suggestion-button starter-chip"
+              className="suggestion-button"
               disabled={isBusy}
               onClick={() => onSuggestionClick(question)}
             >
@@ -85,4 +85,6 @@ const MessageList = ({
   </div>
 );
 
-export default MessageList;
+// Memoized so keystrokes in the composer don't re-render the message pane
+// when nothing it displays has changed.
+export default memo(MessageList);

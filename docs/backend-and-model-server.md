@@ -9,7 +9,8 @@ A Retrieval-Augmented Generation (RAG) system for querying large Egyptian histor
 - **Large PDF Handling**: Optimized for 1000+ page documents
 - **Source Citation**: Provides references back to original document pages
 - **Persistent Indexing**: Vector store maintains indexed documents between sessions
-- **User Authentication**: Secure JWT-based authentication with email verification
+- **User Authentication**: Secure JWT-based authentication (12-hour tokens)
+- **Multi-Document Support**: Upload and index multiple PDFs; queries can target a specific document
 - **Chat History Management**: Persistent conversation tracking with MongoDB
 
 ## System Architecture
@@ -41,8 +42,8 @@ The diagram shows:
 
 ## Prerequisites
 
-- Python 3.8+
-- Node.js 16+
+- Python 3.12
+- Node.js 24
 - Google Cloud account (for the Gemini API — used for both LLM generation and embeddings, so network access is required)
 - MongoDB 6.0+ (local installation or Atlas cloud)
 - MongoDB Compass (GUI recommended)
@@ -106,27 +107,29 @@ The diagram shows:
 
 7. **Set up environment variables**
 
-    The project uses **two separate `.env` files** — one per directory. Example files are provided: `backend/.env.example` and `model-server/.env.example`. Copy each one to `.env` in the same directory and fill in your values.
+    The project uses **two separate `.env` files** for local runs — one per directory. Example files are provided: `backend/.env.example` and `model-server/.env.example` (a third, root `.env.example`, is for Docker Compose — see below). Copy each one to `.env` in the same directory and fill in your values.
 
-    Create `backend/.env` (consumed by `dotenv` in `backend/server.js`):
+    Create `backend/.env` (consumed by `dotenv` via `backend/config/env.js`):
 
     ```
     PORT=3001
     MONGODB_URI=mongodb://localhost:27017/egyptian_history_rag
     JWT_SECRET=your_random_secure_jwt_secret
     MODEL_SERVER_URL=http://localhost:5050
-    EMAIL_SERVICE=smtp.ethereal.email
-    EMAIL_USER=your_email@example.com
-    EMAIL_PASSWORD=your_email_password
-    EMAIL_FROM=no-reply@egyptianhistory.com
+    INTERNAL_API_TOKEN=your_random_shared_internal_token
     ```
+
+    `JWT_SECRET` and `INTERNAL_API_TOKEN` are **required** — the backend fails fast at startup without them (`config/env.js`). `INTERNAL_API_TOKEN` is sent to the model server as the `X-Internal-Token` header and must match the model server's value.
 
     Create `model-server/.env` (consumed by `python-dotenv` via `rag/utils/env_loader.py`):
 
     ```
     GEMINI_API_KEY=your_gemini_api_key
+    INTERNAL_API_TOKEN=your_random_shared_internal_token
     PORT=5050
     ```
+
+    Both secrets are required: the model server refuses to start without `INTERNAL_API_TOKEN`, and indexing/querying fail without `GEMINI_API_KEY`.
 
 8. **Verify MongoDB Connection**
 
@@ -145,13 +148,15 @@ The full stack (frontend, backend, model server, MongoDB) is defined in `docker-
 
     ```
     cp .env.example .env
-    # edit .env — set GEMINI_API_KEY (required)
+    # edit .env — set GEMINI_API_KEY, JWT_SECRET and INTERNAL_API_TOKEN (all required)
     ```
 
     | Variable | Required | Notes |
     |----------|----------|-------|
     | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 3.8 Flash and `gemini-embedding-001` embeddings (indexing and querying) |
-    | `JWT_SECRET` | No | Backend JWT signing secret; falls back to `dev-only-secret-change-me` — always set a real value outside local dev |
+    | `JWT_SECRET` | Yes | Backend JWT signing secret — use a long random string; compose refuses to start without it |
+    | `INTERNAL_API_TOKEN` | Yes | Shared secret the backend sends to the model server as `X-Internal-Token`; the model server rejects requests without it and won't start when unset |
+    | `CORS_ORIGIN` | No | Comma-separated extra allowed CORS origins (e.g. a deployed frontend URL) |
 
 2. **Build and start everything**:
 
@@ -163,7 +168,7 @@ The full stack (frontend, backend, model server, MongoDB) is defined in `docker-
 
 ### How indexing works under Docker
 
-The backend **does not** run Python — it calls `POST http://model-server:5050/index` over HTTP, and the model server runs the indexer in-process. Uploads and the generated vector store are shared between the two containers via named volumes:
+The backend **does not** run Python — it calls `POST http://model-server:5050/index` over HTTP, and the model server runs the indexer on a background thread (`POST /index` returns `202` immediately; the backend polls `GET /index/status` for progress). Uploads and the generated vector store are shared between the two containers via named volumes:
 
 - `rag-data` — mounted at `/app/data` (model-server) and `/model-server/data` (backend, where its `../model-server/data` paths resolve). Seeded with the bundled `data/egyptian_history.pdf` on first run.
 - `vector-store` — mounted at `/app/vector_store` (model-server) and `/model-server/vector_store` (backend). Holds generated `*_vectors.npz` / `*_metadata.json` files.
@@ -174,7 +179,7 @@ The same volume mounts keep `data/` and `vector_store/` consistent when running 
 ### Docker caveats
 
 - Embeddings run through the Gemini API (`gemini-embedding-001`) — there is no local model download, so the model-server image is small and first `up` is fast.
-- The model server binds `0.0.0.0` only inside Docker (via the `HOST` env var); locally it still defaults to `127.0.0.1`.
+- Inside Docker the model server runs under gunicorn bound to `0.0.0.0:5050` (the image's `CMD`); the `HOST`/`PORT` env vars only apply to the local `python model_server.py` dev path, which defaults to `127.0.0.1:5050`.
 - If `GEMINI_API_KEY` is missing the server starts but indexing, retrieval, and LLM generation all fail — it does not prompt for a key when running non-interactively.
 - Vector files (`*_vectors.npz`) created by the old local embedding model are incompatible with `gemini-embedding-001` — re-index your PDFs after upgrading.
 
@@ -203,7 +208,7 @@ The initial migration (`migrations/…-initial-indexes.js`) only creates indexes
 cd model-server
 python model_server.py
 ```
-This configures the Gemini API clients and starts the Flask API at `http://localhost:5050` (`/health`, `/query`, `/index`). Both the LLM and embeddings are remote — a valid `GEMINI_API_KEY` is required.
+This configures the Gemini API clients and starts the Flask API at `http://localhost:5050` (`/health`, `/query`, `/index`, `/index/status`). Both the LLM and embeddings are remote — a valid `GEMINI_API_KEY` is required. `INTERNAL_API_TOKEN` is also required: the server refuses to start without it and expects it as the `X-Internal-Token` header on every request except `/health`.
 
 ### Start the Node.js Server (Port 3001)
 
@@ -222,7 +227,6 @@ The main API will be available at `http://localhost:3001`
 | Endpoint | Method | Description | Request Body |
 |----------|--------|-------------|-------------|
 | `/api/auth/signup` | POST | Register a new user | `{"email": "user@example.com", "password": "SecurePassword123"}` |
-| `/api/auth/verify/{token}` | GET | Verify user email address | N/A |
 | `/api/auth/login` | POST | Login with credentials | `{"email": "user@example.com", "password": "SecurePassword123"}` |
 
 ### Chat/Conversation API
@@ -242,28 +246,31 @@ All endpoints below except `/api/health` require `Authorization: Bearer <token>`
 | Endpoint | Method | Description | Request Body |
 |----------|--------|-------------|-------------|
 | `/api/upload` | POST | Upload a PDF document | Form data with `pdf` file |
-| `/api/index` | POST | Index the uploaded document | `{"filename": "egyptian_history.pdf"}` |
-| `/api/status` | GET | Check indexing status | N/A |
-| `/api/query` | POST | Submit a query | `{"query": "What do you know about Alexandria?", "conversationId": "id"}` |
+| `/api/index` | POST | Start indexing an uploaded document — returns `202 {success, job_id, filename, status}` immediately; the model server indexes in the background | `{"filename": "egyptian_history.pdf"}` |
+| `/api/indexing-status` | GET | Check indexing status (lazily polls the model server) | N/A |
+| `/api/query` | POST | Submit a query | `{"query": "What do you know about Alexandria?", "conversationId": "id", "document": "egyptian_history"}` |
 
 ### Model Services API (Flask)
 
 | Endpoint | Method | Description | Request Body |
 |----------|--------|-------------|-------------|
 | `/health` | GET | Model load status | N/A |
-| `/query` | POST | Run a query through the RAG pipeline | `{"query": "your question", "top_k": 5, "chat_history": []}` |
-| `/index` | POST | Index a PDF from `data/` (runs `PDFIndexer` in-process) | `{"filename": "egyptian_history.pdf"}` |
+| `/query` | POST | Run a query through the RAG pipeline | `{"query": "your question", "top_k": 5, "document": "egyptian_history", "chat_history": []}` |
+| `/index` | POST | Start async indexing of a PDF from `data/` — `202 {job_id, filename, status: "indexing"}` (409 if a job is already running, 404 if the file is missing) | `{"filename": "egyptian_history.pdf"}` |
+| `/index/status` | GET | Status of the single indexing job — `{status: "idle"\|"indexing"\|"done"\|"error", job_id?, filename?, error?}` | N/A |
 
-The backend calls `/index` over HTTP — indexing no longer spawns a Python child process, which is what allows the backend and model server to run in separate containers.
+The backend calls `/index` over HTTP and tracks progress by polling `/index/status` — indexing no longer spawns a Python child process, which is what allows the backend and model server to run in separate containers.
+
+Multiple documents can be uploaded and indexed: uploads keep their (sanitized) original filename, and a document counts as indexed only when **both** `{name}_vectors.npz` and `{name}_metadata.json` exist in `vector_store/`. Queries select the target document via the optional `document` field — the PDF's basename without the `.pdf` extension (default `egyptian_history`).
 
 ## Authentication Details
 
 The system uses JWT (JSON Web Tokens) for authentication:
 
 - **Token Format**: Bearer token in Authorization header
-- **Token Lifespan**: 7 days by default (configurable in `.env`)
-- **Email Verification**: Required before login is permitted
-- **Password Requirements**: Minimum 8 characters with numbers and letters
+- **Token Lifespan**: 12 hours (`TOKEN_TTL` in `controllers/authController.js`)
+- **Email Verification**: None — accounts are usable immediately after signup (there is no verification step)
+- **Password Requirements**: Minimum 8 characters
 
 Example authentication header:
 ```
@@ -279,13 +286,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:3001/api/auth/signup
 ```
 
-2. **Verify email** (link sent to user's email):
-```
-# User clicks verification link or you can test with:
-curl -X GET http://localhost:3001/api/auth/verify/{verification_token}
-```
-
-3. **Login to get JWT token**:
+2. **Login to get JWT token**:
 ```
 curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:3001/api/auth/login
 ```
@@ -297,12 +298,17 @@ curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com
 curl -X POST -H "Authorization: Bearer YOUR_TOKEN" -F "pdf=@path/to/document.pdf" http://localhost:3001/api/upload
 ```
 
-2. **Index the document**:
+2. **Start indexing the document** (returns `202` immediately — indexing runs in the background):
 ```
 curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"filename": "egyptian_history.pdf"}' http://localhost:3001/api/index
 ```
 
-3. **Query the system**:
+3. **Poll indexing status until it reports `done`**:
+```
+curl -X GET -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3001/api/indexing-status
+```
+
+4. **Query the system** (add `"document": "<pdf-basename>"` to target a document other than the default `egyptian_history`):
 ```
 curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"query":"Who built the Great Pyramid of Giza?"}' http://localhost:3001/api/query
 ```
@@ -485,22 +491,6 @@ curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_
 }
 ```
 
-## Configuration Options
-
-Modify `config.json` to adjust system behavior:
-```
-{
-  "chunk_size": 500,
-  "chunk_overlap": 100,
-  "top_k": 5,
-  "temperature": 0.7,
-  "embedding_batch_size": 32,
-  "max_tokens": 1024,
-  "jwt_expiration": "7d",
-  "verification_expiry": "24h"
-}
-```
-
 ## Troubleshooting
 
 **Common Issues**:
@@ -510,8 +500,8 @@ Modify `config.json` to adjust system behavior:
    - Check quota limits in Google Cloud Console
 
 2. **Indexing Fails on Large PDFs**:
-   - Reduce `chunk_size` in config.json
-   - Increase `embedding_batch_size`
+   - Check `GET /api/indexing-status` (or the model server's `GET /index/status`) — it surfaces the indexing error
+   - Large PDFs can hit Gemini embedding rate limits — wait and retry indexing (see item 4)
 
 3. **Port Conflicts**:
    - Change `PORT` in `model-server/.env` (Flask, default 5050) or `backend/.env` (Express, default 3001) if occupied. If you change the Flask port, update `MODEL_SERVER_URL` in `backend/.env` to match.
@@ -521,8 +511,8 @@ Modify `config.json` to adjust system behavior:
    - Verify `GEMINI_API_KEY` is set and has quota in Google AI Studio
 
 5. **Authentication Issues**:
-   - Check that JWT_SECRET is properly set in .env
-   - Verify email verification process is working
+   - Check that JWT_SECRET is set in .env — the backend refuses to start without it
+   - Tokens expire after 12 hours — log in again if requests start returning 401
    - Ensure token is being passed correctly in Authorization header
 
 ## Project Structure
@@ -530,9 +520,10 @@ Modify `config.json` to adjust system behavior:
 egyptian-tour-guide-rag/
 ├── backend/                           # Express API (Node.js)
 │   ├── config/
-│   │   └── database.js                # MongoDB connection setup
+│   │   ├── database.js                # MongoDB connection setup
+│   │   └── env.js                     # Required-env validation (fails fast)
 │   ├── controllers/
-│   │   ├── authController.js          # Signup, login, verification
+│   │   ├── authController.js          # Signup, login
 │   │   ├── chatController.js          # Chat history logic
 │   │   └── ragController.js           # RAG business logic (PDF, query, index)
 │   ├── middleware/
@@ -545,8 +536,6 @@ egyptian-tour-guide-rag/
 │   │   ├── api.js                     # RAG endpoints (upload, index, query)
 │   │   ├── auth.js                    # Auth endpoints (signup, login)
 │   │   └── chat.js                    # Chat endpoints (conversations, messages)
-│   ├── services/
-│   │   └── emailService.js            # Email utility (Ethereal/dev or real SMTP)
 │   ├── migrations/                    # migrate-mongo database migrations
 │   ├── migrate-mongo-config.js        # migrate-mongo config (reads MONGODB_URI)
 │   ├── docker-entrypoint.sh           # Waits for MongoDB, runs migrations, starts app
@@ -564,7 +553,7 @@ egyptian-tour-guide-rag/
 │   │   ├── retriever.py               # Semantic search
 │   │   ├── generator.py               # Response generation
 │   │   └── utils/                     # Path/env/file helpers
-│   ├── data/                          # Uploaded PDF storage
+│   ├── data/                          # Uploaded PDFs (bundled egyptian_history.pdf; other uploads gitignored)
 │   ├── times_places/                  # Monument dataset (trip scheduling)
 │   ├── vector_store/                  # Saved vector embeddings (gitignored)
 │   └── requirements.txt               # Python dependencies

@@ -5,35 +5,29 @@
  * Route :id params are guarded by mongoose.isValidObjectId → tests use real
  * 24-hex ObjectId strings where the id must pass validation.
  */
-process.env.JWT_SECRET = 'test-jwt-secret';
-
 const request = require('supertest');
 
 jest.mock('../models/user', () => require('./mockFactories').makeUserModel());
 jest.mock('../models/conversation', () => require('./mockFactories').makeConversationModel());
 jest.mock('../models/message', () => require('./mockFactories').makeMessageModel());
 
-const User = require('../models/user');
 const Conversation = require('../models/conversation');
 const Message = require('../models/message');
-const { buildApp, authHeader } = require('./helpers');
+const { buildApp, authHeader, sortedLimited, mockAuthUser } = require('./helpers');
 
 const app = buildApp();
 
 const CONV_ID = '64b7f0f4c2a1d3e5f6071829';
 const OTHER_CONV_ID = '64b7f0f4c2a1d3e5f6071830';
 
-/** Chainable mock for Model.find().sort().limit() queries. */
-function sortedLimited(docs) {
-  return {
-    sort: jest.fn().mockReturnValue({ limit: jest.fn().mockResolvedValue(docs) })
-  };
-}
-
 beforeEach(() => {
   jest.clearAllMocks();
   // Auth middleware: resolve the Bearer token to this user (req.userId = 'user-1')
-  User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
+  mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+  Conversation.updateOne.mockResolvedValue({});
+  // getConversation queries messages in parallel with the conversation
+  // lookup — the chain must exist even when the conversation 404s.
+  Message.find.mockReturnValue(sortedLimited([]));
 });
 
 describe('POST /api/chat/conversations', () => {
@@ -74,6 +68,19 @@ describe('POST /api/chat/conversations', () => {
         role: 'user',
         content: 'Tell me about the pyramids'
       })
+    );
+  });
+
+  test('derives the title from the first message in a single save', async () => {
+    const res = await request(app)
+      .post('/api/chat/conversations')
+      .set('Authorization', authHeader())
+      .send({ message: 'Tell me about the pyramids' });
+
+    expect(res.status).toBe(201);
+    // Title derived before the first save — no second conversation write.
+    expect(Conversation).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Tell me about the pyramids' })
     );
   });
 
@@ -120,9 +127,11 @@ describe('GET /api/chat/conversations/:id', () => {
       .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
+    // Soft-deleted conversations are invisible to every route.
     expect(Conversation.findOne).toHaveBeenCalledWith({
       _id: CONV_ID,
-      userId: 'user-1'
+      userId: 'user-1',
+      isActive: true
     });
     expect(res.body.messages).toHaveLength(1);
   });
@@ -150,8 +159,7 @@ describe('GET /api/chat/conversations/:id', () => {
 
 describe('POST /api/chat/conversations/:id/messages', () => {
   test('adds a message to an owned conversation', async () => {
-    const save = jest.fn().mockResolvedValue(true);
-    Conversation.findOne.mockResolvedValue({ _id: CONV_ID, userId: 'user-1', save });
+    Conversation.findOne.mockResolvedValue({ _id: CONV_ID, userId: 'user-1' });
 
     const res = await request(app)
       .post(`/api/chat/conversations/${CONV_ID}/messages`)
@@ -166,7 +174,11 @@ describe('POST /api/chat/conversations/:id/messages', () => {
         content: 'When was Giza built?'
       })
     );
-    expect(save).toHaveBeenCalled(); // conversation timestamp bumped
+    // Timestamp bump goes through updateOne — no full conversation save.
+    expect(Conversation.updateOne).toHaveBeenCalledWith(
+      { _id: CONV_ID },
+      { $set: { updatedAt: expect.any(Date) } }
+    );
   });
 
   test('missing content → 400', async () => {
@@ -207,5 +219,80 @@ describe('POST /api/chat/conversations/:id/messages', () => {
       .send({ role: 'user', content: 'hi' });
 
     expect(res.status).toBe(404);
+  });
+
+  test('metadata keys with dots → 400', async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${CONV_ID}/messages`)
+      .set('Authorization', authHeader())
+      .send({ role: 'user', content: 'hi', metadata: { 'a.b': 1 } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/not allowed/i);
+    expect(Message).not.toHaveBeenCalled();
+  });
+
+  test('metadata keys with $ prefix → 400', async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${CONV_ID}/messages`)
+      .set('Authorization', authHeader())
+      .send({ role: 'user', content: 'hi', metadata: { $where: 'x' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/not allowed/i);
+  });
+
+  test('prototype-polluting metadata key → 400', async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${CONV_ID}/messages`)
+      .set('Authorization', authHeader())
+      .send({ role: 'user', content: 'hi', metadata: JSON.parse('{"__proto__": {"x": 1}}') });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/not allowed/i);
+  });
+
+  test('metadata over the 8KB cap → 400', async () => {
+    const res = await request(app)
+      .post(`/api/chat/conversations/${CONV_ID}/messages`)
+      .set('Authorization', authHeader())
+      .send({ role: 'user', content: 'hi', metadata: { blob: 'x'.repeat(9000) } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/too large/i);
+  });
+});
+
+describe('PUT /api/chat/conversations/:id', () => {
+  test('renames an owned conversation', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    Conversation.findOne.mockResolvedValue({ _id: CONV_ID, userId: 'user-1', save });
+
+    const res = await request(app)
+      .put(`/api/chat/conversations/${CONV_ID}`)
+      .set('Authorization', authHeader())
+      .send({ title: '  New title  ' });
+
+    expect(res.status).toBe(200);
+    expect(save).toHaveBeenCalled();
+  });
+
+  test('empty PUT body → 400 (no silent updatedAt bump)', async () => {
+    const res = await request(app)
+      .put(`/api/chat/conversations/${CONV_ID}`)
+      .set('Authorization', authHeader())
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(Conversation.findOne).not.toHaveBeenCalled();
+  });
+
+  test('blank title → 400', async () => {
+    const res = await request(app)
+      .put(`/api/chat/conversations/${CONV_ID}`)
+      .set('Authorization', authHeader())
+      .send({ title: '   ' });
+
+    expect(res.status).toBe(400);
   });
 });

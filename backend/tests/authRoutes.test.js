@@ -3,8 +3,6 @@
  * The Mongoose User model and bcryptjs are mocked. Email verification was
  * removed along with the mailer — /api/auth/verify/:token no longer exists.
  */
-process.env.JWT_SECRET = 'test-jwt-secret';
-
 const jwt = require('jsonwebtoken');
 const request = require('supertest');
 
@@ -13,7 +11,7 @@ jest.mock('bcryptjs');
 
 const User = require('../models/user');
 const bcrypt = require('bcryptjs');
-const { buildApp } = require('./helpers');
+const { buildApp, mockAuthUser } = require('./helpers');
 
 const app = buildApp();
 
@@ -55,6 +53,25 @@ describe('POST /api/auth/signup', () => {
 
   test('email already in use → 409', async () => {
     User.findOne.mockResolvedValue({ _id: 'existing', email: 'dup@example.com' });
+
+    const res = await request(app)
+      .post('/api/auth/signup')
+      .send({ email: 'dup@example.com', password: 'password123' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/already in use/i);
+  });
+
+  test('unique-index race (E11000 on save) → 409, not a 500', async () => {
+    User.findOne.mockResolvedValue(null); // email looks free…
+    // …but a concurrent signup wins the race at insert time.
+    User.mockImplementationOnce((data = {}) => ({
+      _id: 'user-1',
+      ...data,
+      save: jest.fn().mockRejectedValue(
+        Object.assign(new Error('duplicate key'), { code: 11000 })
+      )
+    }));
 
     const res = await request(app)
       .post('/api/auth/signup')
@@ -129,23 +146,28 @@ describe('POST /api/auth/login', () => {
     expect(res.body.message).toBe('Invalid credentials.');
   });
 
-  test('unknown email → 401', async () => {
+  test('unknown email → 401, still runs a bcrypt compare (timing oracle)', async () => {
     User.findOne.mockResolvedValue(null);
+    bcrypt.compare.mockResolvedValue(false);
 
     const res = await request(app)
       .post('/api/auth/login')
       .send({ email: 'nobody@example.com', password: 'password123' });
 
     expect(res.status).toBe(401);
+    // Compare runs even without a user — against the dummy hash.
+    expect(bcrypt.compare).toHaveBeenCalled();
+    expect(bcrypt.compare.mock.calls[0][0]).toBe('password123');
   });
 
-  test('unverified user → 401 Please verify your email', async () => {
+  test('unverified user → 401 Please verify your email (after password check)', async () => {
     User.findOne.mockResolvedValue({
       _id: 'user-1',
       email: 'a@b.com',
       verified: false,
       password: 'hashed'
     });
+    bcrypt.compare.mockResolvedValue(true); // verified check runs after compare
 
     const res = await request(app)
       .post('/api/auth/login')
@@ -167,7 +189,7 @@ describe('POST /api/auth/login', () => {
 
 describe('GET /api/auth/verify/:token — removed', () => {
   test('authenticated → 404', async () => {
-    User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
+    mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
     const token = jwt.sign({ id: 'user-1' }, process.env.JWT_SECRET);
     const res = await request(app)
       .get(`/api/auth/verify/${token}`)

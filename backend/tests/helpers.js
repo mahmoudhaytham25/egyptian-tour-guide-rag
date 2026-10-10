@@ -17,7 +17,8 @@ process.env.RATE_LIMIT_DISABLED = 'true';
 const jwt = require('jsonwebtoken');
 const { createApp } = require('../app');
 
-const TEST_JWT_SECRET = 'test-jwt-secret';
+// Not a real ObjectId — works because the auth middleware's User.findById is
+// mocked in every suite that exercises protected routes.
 const TEST_USER_ID = 'user-1';
 
 function buildApp() {
@@ -33,4 +34,24 @@ function authHeader(userId = TEST_USER_ID) {
   return `Bearer ${signToken(userId)}`;
 }
 
-module.exports = { buildApp, signToken, authHeader, TEST_JWT_SECRET, TEST_USER_ID };
+/** Chainable mock for Model.find().sort().limit() queries. */
+function sortedLimited(docs) {
+  return {
+    sort: jest.fn().mockReturnValue({ limit: jest.fn().mockResolvedValue(docs) })
+  };
+}
+
+/**
+ * Point the auth middleware's User.findById().select('email').lean() chain at
+ * `user` (or null) — the middleware only hydrates the email field.
+ */
+function mockAuthUser(user) {
+  const User = require('../models/user');
+  User.findById.mockReturnValue({
+    select: jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue(user)
+    })
+  });
+}
+
+module.exports = { buildApp, signToken, authHeader, sortedLimited, mockAuthUser, TEST_USER_ID };

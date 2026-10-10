@@ -1,14 +1,13 @@
 // src/pages/Chat.jsx
-import React from 'react';
 import ChatInterface from '../components/ChatInterface';
 
+// Authenticated landing page (mounted at /chat): the chat interface is the
+// whole page. Knowledge-base document management lives at /documents.
 const Chat = () => {
   return (
-    <div className="chat-page">
-      <main className="chat-page-main">
-        <ChatInterface />
-      </main>
-    </div>
+    <main className="chat-page">
+      <ChatInterface />
+    </main>
   );
 };
 

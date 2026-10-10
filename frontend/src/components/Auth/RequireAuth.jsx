@@ -1,4 +1,4 @@
-import React from "react";
+import { useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import api from "../../services/api";
 
@@ -8,8 +8,17 @@ import api from "../../services/api";
  * redirects to the login page.
  */
 const RequireAuth = ({ children }) => {
-  if (!api.isAuthenticated()) {
-    api.logout(); // drop stale/expired token and related state
+  const authed = api.isAuthenticated();
+
+  // localStorage cleanup is a side effect — keep it out of render so it
+  // isn't double-invoked under StrictMode.
+  useEffect(() => {
+    if (!authed) {
+      api.logout(); // drop stale/expired token and related state
+    }
+  }, [authed]);
+
+  if (!authed) {
     return <Navigate to="/" replace />;
   }
   return children;

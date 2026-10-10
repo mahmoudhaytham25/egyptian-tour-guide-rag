@@ -7,9 +7,9 @@ vi.mock("../components/ChatInterface", () => ({
 
 describe("Chat page", () => {
   it("renders ChatInterface inside the page layout", () => {
-    const { container } = render(<Chat />);
-    expect(container.querySelector(".chat-page")).toBeInTheDocument();
-    expect(container.querySelector(".chat-page-main")).toBeInTheDocument();
+    render(<Chat />);
+    const main = screen.getByRole("main");
+    expect(main).toHaveClass("chat-page");
     expect(screen.getByTestId("chat-interface")).toBeInTheDocument();
   });
 });

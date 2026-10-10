@@ -38,6 +38,8 @@ const conversationLabel = (conversation) => {
  *  - onSelect(conversation): load a conversation's messages into the chat pane
  *  - onNewChat(): clear the pane and start a fresh conversation
  *  - onDelete(conversation): delete a conversation
+ *  - loadError: the conversation list failed to load (non-404)
+ *  - onRetry(): refetch the conversation list
  */
 const HistoryDisplay = ({
   conversations,
@@ -45,6 +47,8 @@ const HistoryDisplay = ({
   onSelect,
   onNewChat,
   onDelete,
+  loadError = false,
+  onRetry = () => {},
 }) => {
   return (
     <aside className="chat-sidebar">
@@ -56,7 +60,18 @@ const HistoryDisplay = ({
       </div>
 
       <div className="conversation-list">
-        {!conversations || conversations.length === 0 ? (
+        {loadError ? (
+          <div className="conversation-error" role="alert">
+            <p>Could not load conversations.</p>
+            <button
+              type="button"
+              className="conversation-retry"
+              onClick={onRetry}
+            >
+              Retry
+            </button>
+          </div>
+        ) : !conversations || conversations.length === 0 ? (
           <div className="conversation-empty">
             <p>No conversations yet.</p>
             <p className="conversation-empty-hint">
@@ -66,30 +81,30 @@ const HistoryDisplay = ({
         ) : (
           conversations.map((conversation) => {
             const isActive = conversation._id === activeConversationId;
+            // The row's click target is a real <button> — keyboard
+            // activation (Enter/Space) then works without a custom
+            // role="button" div wrapping another button (invalid nesting).
             return (
               <div
                 key={conversation._id}
                 className={`conversation-item ${isActive ? "active" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSelect(conversation)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(conversation);
-                  }
-                }}
               >
-                <div className="conversation-item-text">
-                  <span className="conversation-title">
-                    {conversationLabel(conversation)}
+                <button
+                  type="button"
+                  className="conversation-item-main"
+                  onClick={() => onSelect(conversation)}
+                >
+                  <span className="conversation-item-text">
+                    <span className="conversation-title">
+                      {conversationLabel(conversation)}
+                    </span>
+                    <span className="conversation-date">
+                      {formatConversationDate(
+                        conversation.updatedAt || conversation.createdAt
+                      )}
+                    </span>
                   </span>
-                  <span className="conversation-date">
-                    {formatConversationDate(
-                      conversation.updatedAt || conversation.createdAt
-                    )}
-                  </span>
-                </div>
+                </button>
                 <button
                   type="button"
                   className="conversation-delete"

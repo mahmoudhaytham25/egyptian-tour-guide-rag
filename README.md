@@ -46,7 +46,7 @@ Python (Flask, PyMuPDF) · Node.js (Express) · React · MongoDB · Google Gemin
 The whole stack — frontend, backend, model server, and MongoDB — runs with one command:
 
 ```
-cp .env.example .env   # then set GEMINI_API_KEY inside .env
+cp .env.example .env   # then set GEMINI_API_KEY, JWT_SECRET and INTERNAL_API_TOKEN inside .env
 docker compose up --build
 ```
 
@@ -64,7 +64,7 @@ Then open http://localhost:3000.
 2. **API** — `cd backend && npm install && npm start` (port 3001)
 3. **Frontend** — `cd frontend && npm install && npm run dev` (port 3000)
 
-Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Both services need `INTERNAL_API_TOKEN` set to the *same* value (the backend sends it as `X-Internal-Token` when calling the model server). Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
+Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Both services need `INTERNAL_API_TOKEN` set to the *same* value (the backend sends it as `X-Internal-Token` when calling the model server), and the backend additionally requires `JWT_SECRET` — both services fail fast without their secrets. Indexing goes through the model server's `POST /index` endpoint (async — poll via `GET /api/indexing-status`), so the model server must be running before indexing a document.
 
 ### Database migrations
 

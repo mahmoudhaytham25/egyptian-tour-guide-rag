@@ -1,9 +1,10 @@
 /**
  * migrate-mongo configuration.
  *
- * Connection handling mirrors backend/config/database.js: read MONGODB_URI
- * from the environment (via backend/.env + dotenv, like server.js) and fall
- * back to the same localhost URI.
+ * Connection handling: reads MONGODB_URI from the environment (via
+ * backend/.env + dotenv, like server.js). Unlike backend/config/database.js
+ * — which deliberately requires MONGODB_URI — the CLI falls back to a
+ * localhost URI so migrations can run on a dev machine without env setup.
  */
 require('dotenv').config();
 const path = require('path');

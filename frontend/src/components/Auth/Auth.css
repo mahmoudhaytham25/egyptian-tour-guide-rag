@@ -11,7 +11,7 @@
   background:
     linear-gradient(160deg, rgba(18, 20, 34, 0.55), rgba(18, 20, 34, 0.8)),
     url("../../Assets/Images/Pyramids.png") center / cover no-repeat,
-    #181c2e;
+    var(--bg);
 }
 
 .auth-card {
@@ -34,7 +34,7 @@
   gap: 14px;
   padding: 44px 32px;
   text-align: center;
-  background: linear-gradient(160deg, #242842 0%, #3a3f66 100%);
+  background: linear-gradient(160deg, var(--ink) 0%, #3a3f66 100%);
   color: #f5f3ea;
 }
 
@@ -42,7 +42,7 @@
   width: 88px;
   height: 88px;
   border-radius: 50%;
-  border: 3px solid #d4af37;
+  border: 3px solid var(--gold);
   padding: 6px;
   object-fit: cover;
   background: rgba(255, 255, 255, 0.1);
@@ -50,7 +50,7 @@
 
 .auth-brand-title {
   margin: 0;
-  font-family: "Cinzel", Georgia, "Times New Roman", serif;
+  font-family: var(--font-display);
   font-size: 1.7rem;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -60,7 +60,7 @@
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.55;
-  color: #cdbf8f;
+  color: var(--sand);
 }
 
 /* Form panel */
@@ -76,9 +76,9 @@
 
 .auth-form h2 {
   margin: 0 0 8px;
-  font-family: "Cinzel", Georgia, serif;
+  font-family: var(--font-display);
   font-size: 1.5rem;
-  color: #2b2e42;
+  color: var(--card);
 }
 
 .auth-input {
@@ -88,7 +88,7 @@
   border-radius: 12px;
   font-size: 0.95rem;
   font-family: inherit;
-  color: #2b2e42;
+  color: var(--card);
   background: #ffffff;
   outline: none;
   box-sizing: border-box;
@@ -96,11 +96,11 @@
 }
 
 .auth-input::placeholder {
-  color: #9a9db2;
+  color: var(--muted-light);
 }
 
 .auth-input:focus {
-  border-color: #d4af37;
+  border-color: var(--gold);
   box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.2);
 }
 
@@ -123,8 +123,8 @@
   padding: 12px;
   border: none;
   border-radius: 12px;
-  background: linear-gradient(135deg, #d4af37, #b8901f);
-  color: #242842;
+  background: linear-gradient(135deg, var(--gold), var(--gold-deep));
+  color: var(--ink);
   font-size: 0.95rem;
   font-weight: 700;
   font-family: inherit;
@@ -134,13 +134,13 @@
 }
 
 .auth-submit:hover:not(:disabled) {
-  background: linear-gradient(135deg, #e0be45, #c29a22);
+  background: linear-gradient(135deg, var(--gold-hover), var(--gold-hover-deep));
   box-shadow: 0 6px 16px rgba(140, 109, 31, 0.35);
 }
 
 .auth-submit:disabled {
   background: #d7d9e3;
-  color: #8a8da3;
+  color: var(--muted);
   cursor: not-allowed;
 }
 

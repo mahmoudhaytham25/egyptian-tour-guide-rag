@@ -1,4 +1,4 @@
-import React from "react";
+import { memo } from "react";
 import icon from "../../Assets/Images/pharaoh-icon.png";
 import { formatMessageTime } from "./messageUtils";
 
@@ -45,4 +45,6 @@ const ChatMessage = ({ msg, isBusy, onSuggestionClick }) => {
   );
 };
 
-export default ChatMessage;
+// Memoized: every streaming tick and keystroke re-renders the list, so
+// committed rows skip the render when their props are unchanged.
+export default memo(ChatMessage);

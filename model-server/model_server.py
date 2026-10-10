@@ -1,19 +1,16 @@
 import os
-import sys
 import hmac
+import uuid
 import logging
 import threading
 from flask import Flask, request, jsonify
-
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.embedding import EmbeddingModel
 from models.llm import LLMModel
 from rag.retriever import Retriever
 from rag.generator import Generator
 from rag.indexer import PDFIndexer
-from rag.utils import get_data_dir
+from rag.utils import get_data_dir, get_vector_store_dir
 from rag.utils.env_loader import load_environment, get_api_key
 
 # Configure logging
@@ -40,12 +37,27 @@ app = Flask(__name__)
 # Global models - loaded once at startup
 embedding_model = None
 llm_model = None
-retriever = None
 generator = None
+
+# Per-document retrievers, constructed lazily on first use and cached.
+# Indexing a document evicts ONLY that document's retriever — other
+# documents keep their warm caches.
+DEFAULT_DOCUMENT = "egyptian_history"
+TIMES_NAME = "monument_data"
+retrievers = {}
+retrievers_lock = threading.Lock()
 
 # Guards against concurrent indexing runs. NOTE: this lock is process-local,
 # which is why the gunicorn worker count MUST stay at 1 (see Dockerfile).
+# The request handler acquires it non-blocking and the background worker
+# thread releases it when the job finishes.
 indexing_lock = threading.Lock()
+
+# State of the single global indexing job, reported by GET /index/status.
+# Guarded by its own lock — indexing_lock stays held for the entire job,
+# so using it here would make /index/status block until indexing finishes.
+_index_job_lock = threading.Lock()
+_index_job = {"status": "idle"}
 
 # Input limits for /query
 MAX_QUERY_LENGTH = 2000
@@ -70,9 +82,74 @@ def require_internal_token():
     return None
 
 
+def get_retriever(document):
+    """Return the retriever for a document, constructing it on first use."""
+    with retrievers_lock:
+        retriever = retrievers.get(document)
+        if retriever is None:
+            retriever = Retriever(document, TIMES_NAME)
+            retriever.embedding_model = embedding_model  # Share the already loaded model
+            retrievers[document] = retriever
+        return retriever
+
+
+def invalidate_retriever(document):
+    """Drop a document's cached retriever so the next query reloads its
+    freshly indexed vectors. Other documents' caches are untouched."""
+    with retrievers_lock:
+        retrievers.pop(document, None)
+
+
+def _document_is_indexed(document):
+    """True when the document's vector store exists on disk."""
+    vector_store_dir = get_vector_store_dir()
+    return (
+        os.path.exists(os.path.join(vector_store_dir, f"{document}_vectors.npz"))
+        and os.path.exists(os.path.join(vector_store_dir, f"{document}_metadata.json"))
+    )
+
+
+def _update_index_job(**fields):
+    with _index_job_lock:
+        _index_job.update(fields)
+
+
+def _run_indexing_job(safe_filename, pdf_path):
+    """Background worker for POST /index.
+
+    indexing_lock was acquired (non-blocking) by the request handler; this
+    function releases it when the job finishes, success or failure.
+    """
+    try:
+        logger.info(f"Indexing {pdf_path}")
+        indexer = PDFIndexer(pdf_path)
+
+        # Reuse the already-loaded embedding model instead of loading a second copy
+        if embedding_model is not None and embedding_model.model_loaded:
+            indexer.embedding_model = embedding_model
+
+        success = indexer.index()
+
+        if success:
+            # Evict this document's retriever BEFORE releasing the lock so
+            # the next query picks up the freshly indexed vectors and no
+            # query can observe the new files with stale in-memory data in
+            # between. Other documents' retrievers are untouched.
+            invalidate_retriever(os.path.splitext(safe_filename)[0])
+            _update_index_job(status="done")
+            logger.info(f"Indexing completed for {safe_filename}")
+        else:
+            _update_index_job(status="error", error="indexing failed")
+    except Exception:
+        logger.exception("Error indexing document")
+        _update_index_job(status="error", error="indexing failed")
+    finally:
+        indexing_lock.release()
+
+
 def initialize_models():
     """Initialize and load all models at startup"""
-    global embedding_model, llm_model, retriever, generator
+    global embedding_model, llm_model, generator
 
     logger.info("Initializing models...")
 
@@ -96,13 +173,11 @@ def initialize_models():
     llm_model = LLMModel()
     llm_model.load_model()
 
-    # Initialize retriever and generator
-    retriever = Retriever("egyptian_history", "monument_data")  # Pass both arguments
-    retriever.embedding_model = embedding_model  # Share the already loaded model
-
-    generator = Generator("egyptian_history")
+    # Initialize the generator and share the already loaded LLM plus the
+    # lazily-cached default retriever
+    generator = Generator(DEFAULT_DOCUMENT)
     generator.llm = llm_model  # Share the already loaded model
-    generator.retriever = retriever  # Share the already loaded retriever
+    generator.retriever = get_retriever(DEFAULT_DOCUMENT)
 
     logger.info("All models initialized successfully!")
 
@@ -114,7 +189,7 @@ def health_check():
         "models_loaded": {
             "embedding_model": embedding_model is not None and embedding_model.model_loaded,
             "llm_model": llm_model is not None and llm_model.model_loaded,
-            "retriever": retriever is not None,
+            "retriever": retrievers is not None,
             "generator": generator is not None
         }
     })
@@ -143,12 +218,42 @@ def query():
         chat_history = data.get('chat_history', [])
         if not isinstance(chat_history, list):
             return jsonify({"error": "chat_history must be a list"}), 400
+        # Drop malformed entries instead of failing the request — downstream
+        # formatting assumes dicts with string role/content and would die on
+        # a KeyError otherwise.
+        chat_history = [
+            msg for msg in chat_history
+            if isinstance(msg, dict)
+            and isinstance(msg.get('role'), str)
+            and isinstance(msg.get('content'), str)
+        ]
         # Cap history length — the window selection downstream only needs
         # the most recent entries anyway
         chat_history = chat_history[-MAX_CHAT_HISTORY_ENTRIES:]
 
-        # Generate response with chat history
-        response = generator.generate_response(query_text, top_k=top_k, chat_history=chat_history)
+        # Which indexed document to query — a bare name (no extension, no
+        # path), sanitized identically to /index filenames
+        document = data.get('document') or DEFAULT_DOCUMENT
+        if not isinstance(document, str):
+            return jsonify({"error": "document must be a string"}), 400
+        safe_document = os.path.basename(document)
+        if safe_document != document or not safe_document:
+            return jsonify({"error": "invalid document — only names of indexed PDFs are allowed"}), 400
+
+        if not _document_is_indexed(safe_document):
+            return jsonify({
+                "success": False,
+                "error": f"unknown document '{safe_document}' — it has not been indexed"
+            }), 404
+
+        # Generate response with chat history against that document's
+        # retriever
+        response = generator.generate_response(
+            query_text,
+            top_k=top_k,
+            chat_history=chat_history,
+            retriever=get_retriever(safe_document),
+        )
 
         return jsonify({
             "success": True,
@@ -156,19 +261,22 @@ def query():
             "response": response
         })
     except Exception:
+        # success:false + 5xx tells the backend NOT to persist an assistant
+        # message — generation genuinely failed rather than producing a
+        # user-facing answer.
         logger.exception("Error processing query")
-        return jsonify({"error": "query failed"}), 500
+        return jsonify({"success": False, "error": "query failed"}), 500
 
 @app.route('/index', methods=['POST'])
 def index_document():
-    """Index a PDF that lives in the data/ directory.
+    """Queue indexing of a PDF that lives in the data/ directory.
 
     This replaces the old flow where the Express backend spawned
     rag/indexer.py as a local child process — running indexing in-process
     here means the backend only ever talks to this server over HTTP.
 
     Request body: {"filename": "egyptian_history.pdf"}
-    Blocks until indexing completes and returns success/failure.
+    Returns 202 immediately; poll GET /index/status for the outcome.
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -188,39 +296,40 @@ def index_document():
         return jsonify({"error": "PDF file not found in data directory"}), 404
 
     if not indexing_lock.acquire(blocking=False):
-        return jsonify({"error": "indexing already in progress"}), 409
+        with _index_job_lock:
+            job = dict(_index_job)
+        return jsonify({
+            "error": "indexing already in progress",
+            "job_id": job.get("job_id"),
+            "filename": job.get("filename"),
+        }), 409
 
-    try:
-        logger.info(f"Indexing {pdf_path}")
-        indexer = PDFIndexer(pdf_path)
+    job_id = uuid.uuid4().hex
+    _update_index_job(status="indexing", job_id=job_id, filename=safe_filename, error=None)
 
-        # Reuse the already-loaded embedding model instead of loading a second copy
-        if embedding_model is not None and embedding_model.model_loaded:
-            indexer.embedding_model = embedding_model
+    threading.Thread(
+        target=_run_indexing_job,
+        args=(safe_filename, pdf_path),
+        daemon=True,
+    ).start()
 
-        success = indexer.index()
-
-        # Invalidate the retriever's cached vectors INSIDE the lock so the
-        # next query picks up the freshly indexed document and no query can
-        # observe the new files with stale in-memory data in between.
-        if success and retriever is not None:
-            retriever.embeddings = None
-            retriever.metadata = None
-    except Exception:
-        logger.exception("Error indexing document")
-        return jsonify({"error": "indexing failed"}), 500
-    finally:
-        indexing_lock.release()
-
-    if not success:
-        return jsonify({"error": "indexing failed"}), 500
-
-    logger.info(f"Indexing completed for {filename}")
+    logger.info(f"Indexing started for {filename} (job {job_id})")
     return jsonify({
-        "success": True,
-        "message": f"Indexing of {filename} completed successfully",
-        "progress": 100
-    })
+        "job_id": job_id,
+        "filename": safe_filename,
+        "status": "indexing"
+    }), 202
+
+@app.route('/index/status', methods=['GET'])
+def index_status():
+    """Report the state of the single global indexing job.
+
+    Response: {"status": "idle"|"indexing"|"done"|"error"} plus job_id,
+    filename, and error when present.
+    """
+    with _index_job_lock:
+        job = {key: value for key, value in _index_job.items() if value is not None}
+    return jsonify(job)
 
 # Initialize models at import time so this also runs under gunicorn — each
 # worker imports this module once, and the worker count is pinned to 1 in
@@ -228,9 +337,10 @@ def index_document():
 initialize_models()
 
 if __name__ == "__main__":
-    # Local development only — production runs under gunicorn (see Dockerfile).
-    # Bind to localhost by default — only the Express backend needs to reach
-    # this server. In Docker, HOST=0.0.0.0 is set so other containers can connect.
+    # Local development only — production runs under gunicorn, which binds
+    # 0.0.0.0:5050 directly (see Dockerfile CMD — HOST/PORT are not read
+    # there). Bind to localhost by default here — only the Express backend
+    # needs to reach this server.
     port = int(os.environ.get("PORT", 5050))
     host = os.environ.get("HOST", "127.0.0.1")
     logger.info(f"Model server running on {host}:{port}")

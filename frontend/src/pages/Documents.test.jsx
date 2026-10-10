@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import Documents from "./Documents";
 
 // Children are stubbed so this test only covers the page's composition and
@@ -29,13 +30,21 @@ vi.mock("../components/DocumentManager", async () => {
   };
 });
 
+// The page renders a react-router <Link>, so renders need a Router.
+const renderPage = () =>
+  render(
+    <MemoryRouter>
+      <Documents />
+    </MemoryRouter>
+  );
+
 describe("Documents page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("renders the Knowledge Base section with navigation", () => {
-    render(<Documents />);
+    renderPage();
     expect(
       screen.getByRole("heading", { name: "Knowledge Base" })
     ).toBeInTheDocument();
@@ -48,7 +57,7 @@ describe("Documents page", () => {
   });
 
   it("remounts DocumentManager when the uploader signals a new document", () => {
-    render(<Documents />);
+    renderPage();
     expect(managerMounts).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("uploader"));

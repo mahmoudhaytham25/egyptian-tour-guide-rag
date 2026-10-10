@@ -1,7 +1,6 @@
 // src/App.jsx
-import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Home from './pages/Home';
+import Chat from './pages/Chat';
 import Documents from './pages/Documents';
 import Login from './components/Auth/Login'
 import Signup from './components/Auth/Register'
@@ -20,7 +19,7 @@ function App() {
             path="/chat"
             element={
               <RequireAuth>
-                <Home />
+                <Chat />
               </RequireAuth>
             }
           />

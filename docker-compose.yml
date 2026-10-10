@@ -22,9 +22,8 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
       # Shared secret the backend must send as X-Internal-Token
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
-      # 0.0.0.0 so the backend container can reach it (default is 127.0.0.1)
-      HOST: 0.0.0.0
-      PORT: 5050
+      # NOTE: no HOST/PORT here — gunicorn's CMD hard-codes --bind
+      # 0.0.0.0:5050; those env vars are only read by the __main__ dev path.
     volumes:
       # Uploaded PDFs — shared with the backend (uploads land here).
       # Seeded with the image's bundled data/egyptian_history.pdf on first run.
@@ -90,6 +89,14 @@ services:
         condition: service_healthy
     ports:
       - "3000:8080"
+    # nginx-unprivileged listens on 8080 (see frontend/nginx.conf); the
+    # alpine-based image ships busybox wget for the probe.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
 volumes:
   mongo-data:
