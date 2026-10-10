@@ -1,10 +1,10 @@
-# Egyptian History RAG System with Gemini 2.0 Flash
+# Egyptian History RAG System with Gemini 3.8 Flash
 
-A Retrieval-Augmented Generation (RAG) system for querying large Egyptian history PDF documents, powered by Gemini 2.0 for language generation and the Gemini embeddings API (`text-embedding-004`) for embeddings.
+A Retrieval-Augmented Generation (RAG) system for querying large Egyptian history PDF documents, powered by Gemini 3.8 for language generation and the Gemini embeddings API (`gemini-embedding-001`) for embeddings.
 
 ## Key Features
 
-- **Gemini 2.0 Integration**: Uses Google's latest Gemini 2.0 Flash model for high-quality responses
+- **Gemini 3.8 Integration**: Uses Google's latest Gemini 3.8 Flash model for high-quality responses
 - **Flask API**: Model services hosted locally for efficient reuse
 - **Large PDF Handling**: Optimized for 1000+ page documents
 - **Source Citation**: Provides references back to original document pages
@@ -18,7 +18,7 @@ A Retrieval-Augmented Generation (RAG) system for querying large Egyptian histor
     A[User Query] --> B[Flask API]
     B --> C[Retriever]
     C --> D[Vector Store]
-    B --> E[Gemini 2.0 LLM]
+    B --> E[Gemini 3.8 LLM]
     D --> E
     E --> F[Response with Sources]
 ```
@@ -36,7 +36,7 @@ The diagram shows:
    - `Flask API`: Main request handler
    - `Retriever`: Semantic search component
    - `Vector Store`: Stored document embeddings
-   - `Gemini 2.0 Flash LLM`: Response generator
+   - `Gemini 3.8 Flash LLM`: Response generator
    - `Response with Sources`: Final output with citations
 
 ## Prerequisites
@@ -150,7 +150,7 @@ The full stack (frontend, backend, model server, MongoDB) is defined in `docker-
 
     | Variable | Required | Notes |
     |----------|----------|-------|
-    | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 2.0 Flash and `text-embedding-004` embeddings (indexing and querying) |
+    | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 3.8 Flash and `gemini-embedding-001` embeddings (indexing and querying) |
     | `JWT_SECRET` | No | Backend JWT signing secret; falls back to `dev-only-secret-change-me` — always set a real value outside local dev |
 
 2. **Build and start everything**:
@@ -173,10 +173,10 @@ The same volume mounts keep `data/` and `vector_store/` consistent when running 
 
 ### Docker caveats
 
-- Embeddings run through the Gemini API (`text-embedding-004`) — there is no local model download, so the model-server image is small and first `up` is fast.
+- Embeddings run through the Gemini API (`gemini-embedding-001`) — there is no local model download, so the model-server image is small and first `up` is fast.
 - The model server binds `0.0.0.0` only inside Docker (via the `HOST` env var); locally it still defaults to `127.0.0.1`.
 - If `GEMINI_API_KEY` is missing the server starts but indexing, retrieval, and LLM generation all fail — it does not prompt for a key when running non-interactively.
-- Vector files (`*_vectors.npz`) created by the old local embedding model are incompatible with `text-embedding-004` — re-index your PDFs after upgrading.
+- Vector files (`*_vectors.npz`) created by the old local embedding model are incompatible with `gemini-embedding-001` — re-index your PDFs after upgrading.
 
 ## Running the System
 
@@ -535,10 +535,10 @@ egyptian-tour-guide-rag/
 │   └── package.json                   # Node.js dependencies & scripts
 │
 ├── model-server/                      # Python model services + RAG pipeline
-│   ├── model_server.py                # Flask app for Gemini 2.0 & embeddings
+│   ├── model_server.py                # Flask app for Gemini 3.8 & embeddings
 │   ├── models/
 │   │   ├── embedding.py               # Embedding model wrapper
-│   │   ├── llm.py                     # Gemini 2.0 Flash interface
+│   │   ├── llm.py                     # Gemini 3.8 Flash interface
 │   │   └── reranker.py                # Result reranking
 │   ├── rag/
 │   │   ├── classifier.py              # Prompt type classification

@@ -27,7 +27,7 @@ backend/           Express API (port 3001) — JWT auth, conversations, RAG endp
      │                              └─ calls model-server /query + /index over HTTP
 model-server/      Flask model services (port 5050) + RAG pipeline
                    ├─ rag/          classifier, indexer, retriever, generator
-                   ├─ models/       Gemini 2.0 Flash LLM + Gemini embeddings (text-embedding-004)
+                   ├─ models/       Gemini 3.8 Flash LLM + Gemini embeddings (gemini-embedding-001)
                    ├─ data/         uploaded PDFs (incl. bundled egyptian_history.pdf)
                    └─ times_places/ monument dataset for trip scheduling
 
@@ -36,7 +36,7 @@ MongoDB            users, conversations, chat history
 
 ## Stack
 
-Python (Flask, PyMuPDF) · Node.js (Express) · React · MongoDB · Google Gemini 2.0 Flash + text-embedding-004 · JWT
+Python (Flask, PyMuPDF) · Node.js (Express) · React · MongoDB · Google Gemini 3.8 Flash + gemini-embedding-001 · JWT
 
 ## Getting Started
 
@@ -53,8 +53,9 @@ Then open http://localhost:3000.
 
 - **`GEMINI_API_KEY`** is required by the model server — get one at [Google AI Studio](https://aistudio.google.com/app/apikey).
 - **`JWT_SECRET`** is optional; compose falls back to a dev-only value. Set a long random string for real deployments.
-- `GEMINI_API_KEY` is required for indexing AND querying — embeddings run through the Gemini API too (`text-embedding-004`), so there is no model download and first start is fast. If you previously indexed with the old local model, re-index: the new embeddings are incompatible with old vector files.
+- `GEMINI_API_KEY` is required for indexing AND querying — embeddings run through the Gemini API too (`gemini-embedding-001`), so there is no model download and first start is fast. If you previously indexed with the old local model, re-index: the new embeddings are incompatible with old vector files.
 - Named volumes keep MongoDB data, uploaded PDFs (`rag-data`, seeded with `data/egyptian_history.pdf`), and the generated vector index (`vector-store`) persistent across restarts. Upload a PDF + index it once (Documents UI) or re-index the bundled PDF after a fresh `up`.
+- **Free-tier quota caveat:** on a free Google AI Studio key, generation (`gemini-3.8-flash`) is limited to ~5 requests/min and ~20 requests/day — and each user query fires *up to 3* generate calls (intent classification, optional query enhancement, answer). Embeddings count ~1 quota unit *per text* against ~100/min, so indexing the bundled 1,275-page PDF (~3,800 chunks) takes ~40 min of quota pacing. A paid key removes these limits.
 
 ### Run locally (without Docker)
 

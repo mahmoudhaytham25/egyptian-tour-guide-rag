@@ -14,14 +14,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Gemini embedding model — served remotely, no local model download.
-DEFAULT_MODEL_NAME = "models/text-embedding-004"
+# NOTE: text-embedding-004 was retired; gemini-embedding-001 is the GA model.
+DEFAULT_MODEL_NAME = "models/gemini-embedding-001"
 
-# text-embedding-004 accepts at most 100 texts per embed_content request.
+# Request 768-dim vectors (gemini-embedding-001 also supports 1536/3072).
+OUTPUT_DIMENSIONALITY = 768
+
+# embed_content accepts at most 100 texts per request.
 MAX_BATCH_SIZE = 100
 
-# Simple retry policy for rate-limit / transient server errors.
-MAX_RETRIES = 3
+# Retry policy. Free-tier embedding quota is 100 units/min and each text in a
+# batch counts — a full batch can consume an entire minute's budget, so 429s
+# need ~60s waits, not the usual short backoff.
+MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2.0
+RATE_LIMIT_WAIT_SECONDS = 65.0
 
 
 class EmbeddingModel:
@@ -100,17 +107,22 @@ class EmbeddingModel:
                 result = genai.embed_content(
                     model=self.model_name,
                     content=texts,
-                    task_type=task_type
+                    task_type=task_type,
+                    output_dimensionality=OUTPUT_DIMENSIONALITY,
                 )
                 return result["embedding"]
             except Exception as e:
                 if attempt == MAX_RETRIES:
                     raise
+                # Per-minute quota exhaustion needs a long wait, not jitter —
+                # regular transient errors keep the short exponential backoff.
+                is_rate_limit = "429" in str(e) or "quota" in str(e).lower()
+                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit else delay
                 logger.warning(
-                    f"Embedding request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)} — "
-                    f"retrying in {delay:.0f}s"
+                    f"Embedding request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
+                    f"retrying in {wait:.0f}s"
                 )
-                time.sleep(delay)
+                time.sleep(wait)
                 delay *= 2
 
     @staticmethod

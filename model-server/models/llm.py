@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 class LLMModel:
-    def __init__(self, model_name="gemini-2.0-flash", model_path=None):
+    def __init__(self, model_name="gemini-3.8-flash", model_path=None):
         """
         Initialize the LLM model.
         

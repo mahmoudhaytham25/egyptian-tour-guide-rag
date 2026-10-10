@@ -109,7 +109,7 @@ This frontend is designed to work with a Node.js/Python backend RAG system. The 
 ├── model_server.py # Flask model services
 ├── models/
 │ ├── embedding.py # Embedding model wrapper
-│ └── llm.py # Gemini 2.0 Flash interface
+│ └── llm.py # Gemini 3.8 Flash interface
 ├── rag/
 │ ├── classifier.py # Classify prompts either RAG related or Converstational
 │ ├── indexer.py # PDF processing
