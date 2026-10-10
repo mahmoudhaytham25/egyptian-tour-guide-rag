@@ -28,10 +28,11 @@ A React-based frontend application that interfaces with a Retrieval-Augmented Ge
 
 ## Technologies Used
 
-- React.js
+- React.js (built with Vite)
+- Vitest + Testing Library for tests
 - Axios for API communication
 - React Router for navigation
-- Styled-components for styling
+- Bootstrap for styling
 
 ## Installation
 
@@ -51,11 +52,11 @@ npm install
 3. Set up the backend:
 - Make sure your RAG backend server is running
 - By default, the frontend expects the backend to be running on http://localhost:3001
-- If your backend uses a different URL, update the `API_URL` in `src/services/api.js`
+- If your backend uses a different URL, set the `VITE_API_URL` environment variable (see `src/services/api.js`)
 
 4. Start the development server:
 ```
-npm start
+npm run dev
 ```
 5. Open your browser and navigate to:
 ```
@@ -94,8 +95,8 @@ egypt-rag-frontend/
 │ ├── pages/
 │ │ ├── Home.jsx
 │ │ └── Chat.jsx
-│ ├── App.js
-│ └── index.js
+│ ├── App.jsx
+│ └── index.jsx
 └── package.json
 ```
 

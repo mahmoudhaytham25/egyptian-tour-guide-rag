@@ -87,11 +87,7 @@ jobs:
         run: npm ci
       - name: Test
         working-directory: frontend
-        env:
-          CI: "true"
-        run: npm test -- --watchAll=false
+        run: npm test
       - name: Build
         working-directory: frontend
-        env:
-          DISABLE_ESLINT_PLUGIN: "true"
         run: npm run build

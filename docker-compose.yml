@@ -83,7 +83,7 @@ services:
       args:
         # Baked into the static bundle at build time — must be the address
         # the *browser* uses to reach the backend (localhost, port-mapped).
-        REACT_APP_API_URL: http://localhost:3001/api
+        VITE_API_URL: http://localhost:3001/api
     restart: unless-stopped
     depends_on:
       backend:

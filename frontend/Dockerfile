@@ -8,11 +8,10 @@ RUN npm ci
 
 COPY . .
 
-# CRA inlines this at build time (see src/services/api.js)
-ARG REACT_APP_API_URL=http://localhost:3001/api
-ENV REACT_APP_API_URL=$REACT_APP_API_URL
+# Vite inlines this at build time (see src/services/api.js)
+ARG VITE_API_URL=http://localhost:3001/api
+ENV VITE_API_URL=$VITE_API_URL
 
-ENV DISABLE_ESLINT_PLUGIN=true
 RUN npm run build
 
 # ---- Serve stage ----
@@ -20,7 +19,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/build /usr/share/nginx/html
+COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080
 

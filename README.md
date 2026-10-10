@@ -62,7 +62,7 @@ Then open http://localhost:3000.
 
 1. **Model server** — `cd model-server && pip install -r requirements.txt && python model_server.py` (port 5050)
 2. **API** — `cd backend && npm install && npm start` (port 3001)
-3. **Frontend** — `cd frontend && npm install && npm start` (port 3000)
+3. **Frontend** — `cd frontend && npm install && npm run dev` (port 3000)
 
 Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Both services need `INTERNAL_API_TOKEN` set to the *same* value (the backend sends it as `X-Internal-Token` when calling the model server). Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
 
