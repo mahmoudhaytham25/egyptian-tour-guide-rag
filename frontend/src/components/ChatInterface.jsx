@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import api from "../services/api";
 import HistoryDisplay from "./HistoryDisplay";
 import "./ChatInterface.css";
@@ -22,56 +22,464 @@ import abuSimbelTemple from "../Assets/Images/abuSimbelTemple.jpg";
 import philaeTemple from "../Assets/Images/philaeTemple.jpg";
 import saqqaraStepPyramid from "../Assets/Images/saqqaraStepPyramid.jpg";
 
-/*
- * CONVERSATION FEATURES CONFIGURATION:
- * 
- * Conversation features are now ENABLED because your backend supports:
- * - POST /api/chat/conversations (create conversation)
- * - GET /api/chat/conversations (get user conversations)
- * - GET /api/chat/conversations/:id (get specific conversation)
- * - POST /api/chat/conversations/:id/messages (add message to conversation)
- * - PUT /api/chat/conversations/:id (update conversation)
- * - DELETE /api/chat/conversations/:id (delete conversation)
- * 
- * CHAT HISTORY CONFIGURATION:
- * Set this to false to completely disable chat history loading/saving
- * (useful when backend doesn't support chat history endpoints yet)
- */
-const ENABLE_CHAT_HISTORY = true; // Re-enabled - user switching is working correctly
+/* Keywords in the last user message → themed background image. */
+const BACKGROUND_IMAGE_RULES = [
+  { keywords: ["pyramids", "giza", "egypt pyramids"], img: pyramids },
+  { keywords: ["sabil kuttab", "abd elrahman katkhuda"], img: sabilKuttab },
+  {
+    keywords: [
+      "greco",
+      "roman",
+      "Roman amphitheater",
+      "kom el-dikka",
+      "alexandria",
+    ],
+    img: romanAmphitheater,
+  },
+  {
+    keywords: [
+      "catacombs",
+      "kom el-shoqafa",
+      "alexandria",
+      "rock-cut tombs",
+      "2nd century",
+      "burial site",
+      "roman egypt",
+    ],
+    img: catacombsKomElShoqafa,
+  },
+  {
+    keywords: [
+      "pompey's pillar",
+      "alexandria",
+      "roman column",
+      "diocletian",
+      "ancient alexandria",
+      "roman egypt",
+      "pillar of pompey",
+      "alexandria landmarks",
+      "monument",
+      "egyptian roman ruins",
+      "greco-roman",
+      "granite column",
+      "serapeum",
+      "ruins of serapeum",
+      "3rd century",
+    ],
+    img: pompeysPillar,
+  },
 
-// Global flag to prevent multiple conversation loads
-let globalConversationLoaded = false;
-let globalCurrentUserId = null;
+  {
+    keywords: [
+      "black pyramid",
+      "king amenemhat iii",
+      "dahshur",
+      "middle kingdom",
+      "mudbrick pyramid",
+      "collapsed pyramid",
+      "amenemhat pyramid",
+    ],
+    img: blackPyramid,
+  },
+  {
+    keywords: [
+      "great pyramid",
+      "pyramid of khufu",
+      "giza",
+      "great pyramid of giza",
+      "cheops",
+      "old kingdom",
+      "largest pyramid",
+      "seven wonders",
+      "pyramids",
+    ],
+    img: greatPyramid,
+  },
+  {
+    keywords: [
+      "pyramid of khafre",
+      "khafre",
+      "giza",
+      "middle pyramid",
+      "second pyramid",
+      "chephren",
+      "pyramids",
+    ],
+    img: khafrePyramid,
+  },
+  {
+    keywords: [
+      "pyramid of menkaure",
+      "menkaure",
+      "giza",
+      "third pyramid",
+      "smallest pyramid",
+      "pyramids",
+    ],
+    img: menkaurePyramid,
+  },
+  {
+    keywords: [
+      "sphinx",
+      "great sphinx",
+      "sphinx of giza",
+      "giza",
+      "lion statue",
+      "khafre sphinx",
+      "ancient egypt",
+      "guardian of pyramids",
+    ],
+    img: sphinxGiza,
+  },
+  {
+    keywords: [
+      "temple of karnak",
+      "karnak",
+      "thebes",
+      "luxor",
+      "amun-ra",
+      "hypostyle hall",
+      "ancient temple",
+      "new kingdom",
+      "egyptian temples",
+    ],
+    img: karnakTemple,
+  },
+  {
+    keywords: [
+      "luxor temple",
+      "luxor",
+      "temple of luxor",
+      "thebes",
+      "amun",
+      "ancient egypt",
+      "night temple",
+      "obelisk",
+      "new kingdom",
+    ],
+    img: luxorTemple,
+  },
+  {
+    keywords: [
+      "valley of the kings",
+      "thebes",
+      "luxor",
+      "royal tombs",
+      "pharaoh tombs",
+      "tutankhamun",
+      "new kingdom",
+      "necropolis",
+      "burial site",
+    ],
+    img: valleyOfTheKings,
+  },
+  {
+    keywords: [
+      "temple of abu simbel",
+      "abu simbel",
+      "ramses ii",
+      "great temple",
+      "nubia",
+      "rock-cut temple",
+      "aswan",
+      "sun festival",
+      "ancient egypt",
+      "new kingdom",
+    ],
+    img: abuSimbelTemple,
+  },
+  {
+    keywords: [
+      "philae temple",
+      "philae",
+      "isis temple",
+      "temple of isis",
+      "aswan",
+      "greco-roman egypt",
+      "island temple",
+      "ancient egyptian temple",
+      "philae island",
+    ],
+    img: philaeTemple,
+  },
+  {
+    keywords: [
+      "saqqara",
+      "step pyramid",
+      "pyramid of djoser",
+      "djoser",
+      "saqqara step pyramid",
+      "oldest pyramid",
+      "old kingdom",
+      "necropolis",
+      "memphis",
+    ],
+    img: saqqaraStepPyramid,
+  },
+];
 
-// Global flags to prevent repeated logging
-let hasLoggedConversationFeatures = false;
-let hasLoggedTokenInfo = false;
-
-// Helper functions for global flags
-const getGlobalConversationLoaded = () => {
-  return localStorage.getItem('globalConversationLoaded') === 'true';
+/* Follow-up question pools keyed by topic, used to build suggestion buttons. */
+const TOPIC_SUGGESTIONS = {
+  pyramids: [
+    "How were the pyramids built?",
+    "Who were the pharaohs buried in pyramids?",
+    "What's inside the pyramids?",
+    "How long did it take to build the Great Pyramid?",
+    "What tools did they use to build pyramids?",
+    "Why were pyramids built in that shape?",
+    "How many pyramids are there in Egypt?",
+    "What was the purpose of the pyramid complex?",
+    "How did they transport the stones?",
+    "What's the significance of pyramid alignment?"
+  ],
+  temples: [
+    "What was the purpose of Egyptian temples?",
+    "How were temples decorated?",
+    "Who could enter temples?",
+    "What ceremonies took place in temples?",
+    "How were temples funded?",
+    "What's the difference between mortuary and cult temples?",
+    "How were temples oriented?",
+    "What role did priests play in temples?",
+    "How were temples maintained?",
+    "What happened during temple festivals?"
+  ],
+  pharaohs: [
+    "How did pharaohs rule Egypt?",
+    "What was the role of pharaohs in religion?",
+    "How were pharaohs chosen?",
+    "What powers did pharaohs have?",
+    "How did pharaohs communicate with the gods?",
+    "What was the pharaoh's daily life like?",
+    "How were pharaohs buried?",
+    "What titles did pharaohs have?",
+    "How did pharaohs maintain power?",
+    "What happened when a pharaoh died?"
+  ],
+  gods: [
+    "Who were the main Egyptian gods?",
+    "How did Egyptians worship their gods?",
+    "What were Egyptian religious beliefs?",
+    "What was the role of animal gods?",
+    "How were gods represented in art?",
+    "What were the major religious festivals?",
+    "How did gods influence daily life?",
+    "What was the relationship between gods and pharaohs?",
+    "How were gods worshipped in homes?",
+    "What happened to Egyptian religion over time?"
+  ],
+  afterlife: [
+    "What did Egyptians believe about the afterlife?",
+    "How did they prepare for death?",
+    "What was mummification?",
+    "What was the Book of the Dead?",
+    "How did they judge souls in the afterlife?",
+    "What was the journey to the afterlife like?",
+    "What did they bury with the dead?",
+    "How did they protect tombs?",
+    "What was the role of the heart in the afterlife?",
+    "How did beliefs about the afterlife change?"
+  ],
+  alexandria: [
+    "What was Alexandria like in ancient times?",
+    "Who founded Alexandria?",
+    "What was the Library of Alexandria?",
+    "What happened to the Pharos Lighthouse?",
+    "What was Cleopatra's role in Alexandria?",
+    "How did Alexandria become a center of learning?",
+    "What was the cultural mix in Alexandria?",
+    "How did Alexandria influence the Mediterranean?",
+    "What remains of ancient Alexandria today?",
+    "What was the significance of Alexandria's location?"
+  ],
+  cairo: [
+    "What was Cairo like in ancient times?",
+    "How did Cairo develop over time?",
+    "What are the oldest parts of Cairo?",
+    "What was the role of Cairo in Islamic Egypt?",
+    "How did Cairo become the capital?",
+    "What architectural styles are found in Cairo?",
+    "What was medieval Cairo like?",
+    "How did Cairo influence trade routes?",
+    "What are Cairo's most important monuments?",
+    "How has Cairo changed over centuries?"
+  ],
+  sphinx: [
+    "What is the Great Sphinx?",
+    "Who built the Sphinx?",
+    "What does the Sphinx represent?",
+    "How old is the Sphinx?",
+    "What was the Sphinx's original purpose?",
+    "How was the Sphinx carved?",
+    "What happened to the Sphinx's nose?",
+    "What's the connection between the Sphinx and pyramids?",
+    "How has the Sphinx been restored?",
+    "What mysteries surround the Sphinx?"
+  ],
+  valley: [
+    "What is the Valley of the Kings?",
+    "Why was it chosen for royal burials?",
+    "How many tombs are in the Valley?",
+    "What was the most famous discovery there?",
+    "How were the tombs decorated?",
+    "What was the purpose of the valley?",
+    "How did they protect the tombs?",
+    "What happened to the valley over time?",
+    "How were the tombs discovered?",
+    "What treasures were found in the valley?"
+  ],
+  nile: [
+    "What was the importance of the Nile?",
+    "How did the Nile shape Egyptian civilization?",
+    "What was the annual flooding like?",
+    "How did Egyptians use the Nile for transport?",
+    "What was the Nile's role in agriculture?",
+    "How did the Nile influence religion?",
+    "What was the Nile's role in trade?",
+    "How did they navigate the Nile?",
+    "What was the Nile's role in warfare?",
+    "How has the Nile changed over time?"
+  ],
+  hieroglyphs: [
+    "What are hieroglyphs?",
+    "How were hieroglyphs deciphered?",
+    "What was the Rosetta Stone?",
+    "How many hieroglyphic symbols were there?",
+    "Who could read and write hieroglyphs?",
+    "How were hieroglyphs used?",
+    "What other writing systems did Egyptians use?",
+    "How did hieroglyphs evolve?",
+    "What was the purpose of hieroglyphs?",
+    "How do we translate hieroglyphs today?"
+  ]
 };
 
-const setGlobalConversationLoaded = (value) => {
-  localStorage.setItem('globalConversationLoaded', value.toString());
-};
+const GENERAL_SUGGESTIONS = [
+  "What was daily life like in ancient Egypt?",
+  "How did ancient Egyptians view time?",
+  "What was the role of women in ancient Egypt?",
+  "How did ancient Egyptians trade with other civilizations?",
+  "What was the education system like?",
+  "How did ancient Egyptians measure time?",
+  "What was the role of music in ancient Egypt?",
+  "How did ancient Egyptians view foreigners?",
+  "What was the role of magic in ancient Egypt?",
+  "How did ancient Egyptians view the stars?"
+];
 
-const getGlobalCurrentUserId = () => {
-  return localStorage.getItem('globalCurrentUserId');
-};
+/* Fake-streaming tuning: reveal the answer in ~4-char chunks every ~30ms. */
+const STREAM_CHUNK_SIZE = 4;
+const STREAM_DELAY_MS = 30;
+/* scrollIntoView is throttled while streaming so it runs at most ~8x/sec. */
+const SCROLL_THROTTLE_MS = 120;
+const SUGGESTIONS_DELAY_MS = 1000;
+const GENERIC_ERROR_MESSAGE =
+  "Sorry, I encountered an error processing your request.";
 
-const setGlobalCurrentUserId = (userId) => {
-  if (userId) {
-    localStorage.setItem('globalCurrentUserId', userId);
-  } else {
-    localStorage.removeItem('globalCurrentUserId');
+// Locally created messages get a generated id so React keys stay stable even
+// before the message exists in the database (where it has an _id).
+let localMessageSeq = 0;
+const makeLocalMessage = (type, content, extra = {}) => ({
+  id: `local-${Date.now()}-${localMessageSeq++}`,
+  type,
+  content,
+  timestamp: new Date().toISOString(),
+  ...extra,
+});
+
+// Convert a persisted message doc to the shape the UI renders.
+const formatConversationMessage = (msg) => ({
+  _id: msg._id,
+  type: msg.role === "user" ? "user" : "bot",
+  content: msg.content,
+  timestamp: msg.timestamp,
+});
+
+const messageKey = (msg, index) =>
+  msg._id || msg.id || msg.timestamp || `msg-${index}`;
+
+// Pull the answer text out of whatever /query (or a fallback) returned.
+const extractAnswerText = (response) => {
+  if (typeof response === "string") {
+    return response;
   }
+  if (response && typeof response === "object") {
+    if (typeof response.answer === "string") return response.answer;
+    if (typeof response.response === "string") return response.response;
+    return JSON.stringify(response);
+  }
+  return String(response);
 };
 
-// Function to reset logging flags
-const resetLoggingFlags = () => {
-  hasLoggedConversationFeatures = false;
-  hasLoggedTokenInfo = false;
+// Detect vague questions and provide suggestions instead of querying.
+const detectVagueQuestion = (question) => {
+  const vaguePatterns = [
+    /^what (is|does) (it|this|that) (mean|represent|refer to)\??$/i,
+    /^what (is|does) (it|this|that)\??$/i,
+    /^what about (it|this|that)\??$/i,
+    /^tell me more$/i,
+    /^explain$/i,
+    /^how$/i,
+    /^why$/i
+  ];
+
+  return vaguePatterns.some((pattern) => pattern.test(question.trim()));
+};
+
+// Simple keyword matching on the last response to pick follow-up questions.
+const generateFollowUpSuggestions = (lastResponse) => {
+  const responseLower = lastResponse.toLowerCase();
+  const allSuggestions = [];
+
+  if (responseLower.includes("pyramid")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.pyramids);
+  }
+  if (responseLower.includes("temple")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.temples);
+  }
+  if (responseLower.includes("pharaoh") || responseLower.includes("king")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.pharaohs);
+  }
+  if (responseLower.includes("god") || responseLower.includes("religious")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.gods);
+  }
+  if (
+    responseLower.includes("afterlife") ||
+    responseLower.includes("death") ||
+    responseLower.includes("mummy")
+  ) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.afterlife);
+  }
+  if (responseLower.includes("alexandria")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.alexandria);
+  }
+  if (responseLower.includes("cairo")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.cairo);
+  }
+  if (responseLower.includes("sphinx")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.sphinx);
+  }
+  if (responseLower.includes("valley") || responseLower.includes("tomb")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.valley);
+  }
+  if (responseLower.includes("nile")) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.nile);
+  }
+  if (
+    responseLower.includes("hieroglyph") ||
+    responseLower.includes("writing") ||
+    responseLower.includes("rosetta")
+  ) {
+    allSuggestions.push(...TOPIC_SUGGESTIONS.hieroglyphs);
+  }
+
+  if (allSuggestions.length === 0) {
+    allSuggestions.push(...GENERAL_SUGGESTIONS);
+  }
+
+  // Remove duplicates, shuffle, return 3
+  const uniqueSuggestions = [...new Set(allSuggestions)];
+  return uniqueSuggestions.sort(() => Math.random() - 0.5).slice(0, 3);
 };
 
 const ChatInterface = () => {
@@ -80,360 +488,128 @@ const ChatInterface = () => {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [currentStreamedText, setCurrentStreamedText] = useState("");
-  const [conversationFeaturesAvailable, setConversationFeaturesAvailable] = useState(true);
+  const [conversationFeaturesAvailable, setConversationFeaturesAvailable] =
+    useState(true);
   const [userId, setUserId] = useState(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const messagesEndRef = useRef(null);
-  const inputRef = useRef(null);
-  const streamTimeoutRef = useRef(null);
-  const hasLoadedConversationRef = useRef(false);
   const [backgroundImage, setBackgroundImage] = useState(pyramids);
   const [fade, setFade] = useState(false);
   // Chat history sidebar state
   const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
 
-  const inputData = [
-    { keywords: ["pyramids", "giza", "egypt pyramids"], img: pyramids },
-    { keywords: ["sabil kuttab", "abd elrahman katkhuda"], img: sabilKuttab },
-    {
-      keywords: [
-        "greco",
-        "roman",
-        "Roman amphitheater",
-        "kom el-dikka",
-        "alexandria",
-      ],
-      img: romanAmphitheater,
-    },
-    {
-      keywords: [
-        "catacombs",
-        "kom el-shoqafa",
-        "alexandria",
-        "rock-cut tombs",
-        "2nd century",
-        "burial site",
-        "roman egypt",
-      ],
-      img: catacombsKomElShoqafa,
-    },
-    {
-      keywords: [
-        "pompey's pillar",
-        "alexandria",
-        "roman column",
-        "diocletian",
-        "ancient alexandria",
-        "roman egypt",
-        "pillar of pompey",
-        "alexandria landmarks",
-        "monument",
-        "egyptian roman ruins",
-        "greco-roman",
-        "granite column",
-        "serapeum",
-        "ruins of serapeum",
-        "3rd century",
-      ],
-      img: pompeysPillar,
-    },
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const streamTimeoutRef = useRef(null);
+  const suggestionTimeoutRef = useRef(null);
+  const lastScrollAtRef = useRef(0);
 
-    {
-      keywords: [
-        "black pyramid",
-        "king amenemhat iii",
-        "dahshur",
-        "middle kingdom",
-        "mudbrick pyramid",
-        "collapsed pyramid",
-        "amenemhat pyramid",
-      ],
-      img: blackPyramid,
-    },
-    {
-      keywords: [
-        "great pyramid",
-        "pyramid of khufu",
-        "giza",
-        "great pyramid of giza",
-        "cheops",
-        "old kingdom",
-        "largest pyramid",
-        "seven wonders",
-        "pyramids",
-      ],
-      img: greatPyramid,
-    },
-    {
-      keywords: [
-        "pyramid of khafre",
-        "khafre",
-        "giza",
-        "middle pyramid",
-        "second pyramid",
-        "chephren",
-        "pyramids",
-      ],
-      img: khafrePyramid,
-    },
-    {
-      keywords: [
-        "pyramid of menkaure",
-        "menkaure",
-        "giza",
-        "third pyramid",
-        "smallest pyramid",
-        "pyramids",
-      ],
-      img: menkaurePyramid,
-    },
-    {
-      keywords: [
-        "sphinx",
-        "great sphinx",
-        "sphinx of giza",
-        "giza",
-        "lion statue",
-        "khafre sphinx",
-        "ancient egypt",
-        "guardian of pyramids",
-      ],
-      img: sphinxGiza,
-    },
-    {
-      keywords: [
-        "temple of karnak",
-        "karnak",
-        "thebes",
-        "luxor",
-        "amun-ra",
-        "hypostyle hall",
-        "ancient temple",
-        "new kingdom",
-        "egyptian temples",
-      ],
-      img: karnakTemple,
-    },
-    {
-      keywords: [
-        "luxor temple",
-        "luxor",
-        "temple of luxor",
-        "thebes",
-        "amun",
-        "ancient egypt",
-        "night temple",
-        "obelisk",
-        "new kingdom",
-      ],
-      img: luxorTemple,
-    },
-    {
-      keywords: [
-        "valley of the kings",
-        "thebes",
-        "luxor",
-        "royal tombs",
-        "pharaoh tombs",
-        "tutankhamun",
-        "new kingdom",
-        "necropolis",
-        "burial site",
-      ],
-      img: valleyOfTheKings,
-    },
-    {
-      keywords: [
-        "temple of abu simbel",
-        "abu simbel",
-        "ramses ii",
-        "great temple",
-        "nubia",
-        "rock-cut temple",
-        "aswan",
-        "sun festival",
-        "ancient egypt",
-        "new kingdom",
-      ],
-      img: abuSimbelTemple,
-    },
-    {
-      keywords: [
-        "philae temple",
-        "philae",
-        "isis temple",
-        "temple of isis",
-        "aswan",
-        "greco-roman egypt",
-        "island temple",
-        "ancient egyptian temple",
-        "philae island",
-      ],
-      img: philaeTemple,
-    },
-    {
-      keywords: [
-        "saqqara",
-        "step pyramid",
-        "pyramid of djoser",
-        "djoser",
-        "saqqara step pyramid",
-        "oldest pyramid",
-        "old kingdom",
-        "necropolis",
-        "memphis",
-      ],
-      img: saqqaraStepPyramid,
-    },
-  ];
+  // Cancel every pending timer (stream chunks, delayed suggestions) so a
+  // bot reply can never land in a conversation the user has already left.
+  const cancelPendingTimers = useCallback(() => {
+    if (streamTimeoutRef.current) {
+      clearTimeout(streamTimeoutRef.current);
+      streamTimeoutRef.current = null;
+    }
+    if (suggestionTimeoutRef.current) {
+      clearTimeout(suggestionTimeoutRef.current);
+      suggestionTimeoutRef.current = null;
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Throttled auto-scroll: always scroll on committed message updates; while
+  // streaming, scroll at most once per SCROLL_THROTTLE_MS.
   useEffect(() => {
+    const now = Date.now();
+    if (streaming && now - lastScrollAtRef.current < SCROLL_THROTTLE_MS) {
+      return;
+    }
+    lastScrollAtRef.current = now;
     scrollToBottom();
-  }, [messages, currentStreamedText]);
+  }, [messages, currentStreamedText, streaming]);
 
+  // Mount: focus the input, then fetch the sidebar list and (if any) the most
+  // recent conversation's messages. Async work is gated on `isMounted` so a
+  // remount (or StrictMode double-mount) just refetches cleanly.
   useEffect(() => {
-    // Focus input field when component mounts
     inputRef.current?.focus();
 
-    // Clean up any lingering timeouts when component unmounts
-    return () => {
-      if (streamTimeoutRef.current) {
-        clearTimeout(streamTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Track conversation mode changes
-  useEffect(() => {
-    if (!hasLoggedConversationFeatures) {
-      console.log(`Conversation features ${conversationFeaturesAvailable ? 'enabled' : 'disabled'}`);
-      hasLoggedConversationFeatures = true;
-    }
-  }, [conversationFeaturesAvailable]);
-
-  // Listen for auth token changes (logout/login)
-  useEffect(() => {
     let isMounted = true;
-    
-    const handleStorageChange = (e) => {
-      if (e.key === 'authToken' && isMounted) {
-        console.log("Auth token changed, clearing user data");
-        console.log("New token value:", e.newValue);
-        clearUserData(false); // Don't reset global flags for storage events
-        setUserId(null);
-      }
-    };
 
-    // Listen for storage events (when auth token is removed in another tab/window)
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Also check if auth token was removed in current tab
-    const checkAuthToken = () => {
+    const loadConversations = async () => {
+      const uid = api.getUserId();
+      if (!uid) return; // no token — RequireAuth normally prevents reaching here
       if (!isMounted) return;
-      
-      const token = localStorage.getItem("authToken");
-      if (!token && userId) {
-        console.log("Auth token removed, clearing user data");
-        clearUserData(false); // Don't reset global flags for auth token removal
-        setUserId(null);
-      } else if (token && !userId) {
-        console.log("Auth token found but no user ID set, extracting user ID");
-        const extractedUserId = extractUserIdFromToken(token);
-        console.log("Extracted user ID from token:", extractedUserId);
-        setUserId(extractedUserId);
+
+      setUserId(uid);
+      setIsLoadingHistory(true);
+      try {
+        const list = await api.getConversations();
+        if (!isMounted) return;
+
+        const safeList = Array.isArray(list) ? list : [];
+        setConversations(safeList);
+
+        if (safeList.length > 0) {
+          const latest = safeList[0];
+          setActiveConversationId(latest._id);
+          localStorage.setItem(`conversationId_${uid}`, latest._id);
+
+          try {
+            const data = await api.getConversation(latest._id);
+            if (!isMounted) return;
+            if (data && Array.isArray(data.messages)) {
+              setMessages(data.messages.map(formatConversationMessage));
+            }
+          } catch {
+            // Conversation may have been deleted between calls — non-fatal.
+          }
+        }
+        // No conversations yet: one is created lazily on the first send.
+      } catch (error) {
+        if (!isMounted) return;
+        // 404 means the backend has no conversation endpoints — fall back
+        // to plain /query calls for the rest of the session.
+        if (error.response?.status === 404) {
+          setConversationFeaturesAvailable(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingHistory(false);
+        }
       }
     };
 
-    // Check periodically for auth token changes
-    const interval = setInterval(checkAuthToken, 2000); // Reduced frequency to 2 seconds
+    loadConversations();
 
     return () => {
       isMounted = false;
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
+      cancelPendingTimers();
     };
-  }, [userId]);
+  }, [cancelPendingTimers]);
 
-  // Function to extract user ID from auth token
-  const extractUserIdFromToken = (token) => {
-    try {
-      // If your token is a JWT, you can decode it to get user info
-      // For now, we'll use a simple approach - you can modify this based on your auth system
-      if (!hasLoggedTokenInfo) {
-        console.log("Raw token:", token);
-        const tokenParts = token.split('.');
-        console.log("Token parts:", tokenParts);
-        
-        if (tokenParts.length < 2) {
-          console.log("Token doesn't appear to be a valid JWT");
-          hasLoggedTokenInfo = true;
-          return "current-user";
-        }
-        
-        const tokenData = JSON.parse(atob(tokenParts[1]));
-        console.log("Decoded token data:", tokenData);
-        
-        const userId = tokenData.userId || tokenData.id || tokenData.sub || tokenData.user_id || "current-user";
-        console.log("Extracted user ID from token:", userId);
-        hasLoggedTokenInfo = true;
-        return userId;
-      } else {
-        // Just extract the user ID without logging
-        const tokenParts = token.split('.');
-        if (tokenParts.length < 2) {
-          return "current-user";
-        }
-        const tokenData = JSON.parse(atob(tokenParts[1]));
-        return tokenData.userId || tokenData.id || tokenData.sub || tokenData.user_id || "current-user";
+  // React to a logout in another tab. Same-tab logout already redirects, and
+  // the axios response interceptor clears state on a 401.
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === "authToken" && !e.newValue) {
+        cancelPendingTimers();
+        setMessages([]);
+        setConversations([]);
+        setActiveConversationId(null);
+        setUserId(null);
+        setLoading(false);
+        setStreaming(false);
+        setCurrentStreamedText("");
       }
-    } catch (error) {
-      if (!hasLoggedTokenInfo) {
-        console.log("Could not extract user ID from token, using default");
-        console.error("Token parsing error:", error);
-        hasLoggedTokenInfo = true;
-      }
-      return "current-user";
-    }
-  };
-
-  // Function to clear all user-specific data
-  const clearUserData = (resetGlobalFlags = false) => {
-    console.log("Clearing all user-specific data", resetGlobalFlags ? "(with global flag reset)" : "");
-    // Clear all conversation-related localStorage items
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && (key.startsWith('conversationId_') || key === 'currentUserId')) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach(key => {
-      localStorage.removeItem(key);
-      console.log(`Removed localStorage key: ${key}`);
-    });
-    
-    // Clear messages state
-    setMessages([]);
-    setCurrentStreamedText("");
-    setStreaming(false);
-    setLoading(false);
-    setIsLoadingHistory(false); // Reset loading state
-    setConversations([]); // Clear sidebar list
-    setActiveConversationId(null); // Clear active conversation
-    hasLoadedConversationRef.current = false; // Reset conversation loaded flag
-    
-    // Only reset global flags if explicitly requested (for user switching)
-    if (resetGlobalFlags) {
-      setGlobalConversationLoaded(false); // Reset global flag
-      setGlobalCurrentUserId(null); // Reset global user ID
-      resetLoggingFlags(); // Reset logging flags for new user
-    }
-  };
+    };
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [cancelPendingTimers]);
 
   // Sidebar helpers ----------------------------------------------------
 
@@ -444,8 +620,7 @@ const ChatInterface = () => {
       const safeList = Array.isArray(list) ? list : [];
       setConversations(safeList);
       return safeList;
-    } catch (error) {
-      console.log("Could not refresh conversation list");
+    } catch {
       return [];
     }
   };
@@ -455,8 +630,7 @@ const ChatInterface = () => {
   const getActiveConversationId = () => {
     return (
       activeConversationId ||
-      (userId ? localStorage.getItem(`conversationId_${userId}`) : null) ||
-      localStorage.getItem("conversationId")
+      (userId ? localStorage.getItem(`conversationId_${userId}`) : null)
     );
   };
 
@@ -485,8 +659,8 @@ const ChatInterface = () => {
         }
         return newConversation._id;
       }
-    } catch (error) {
-      console.log("Could not create a new conversation, sending without persistence");
+    } catch {
+      // Persistence unavailable — send the question without a conversation.
     }
     return null;
   };
@@ -497,18 +671,10 @@ const ChatInterface = () => {
     const conversationId = await ensureActiveConversation(question);
 
     const requestData = conversationFeaturesAvailable
-      ? {
-          query: question,
-          conversationId: conversationId,
-          // Include recent conversation history for context
-          conversationHistory: messages.slice(-4).map((msg) => ({
-            role: msg.type === "user" ? "user" : "assistant",
-            content: msg.content,
-          })),
-        }
-      : question.trim();
+      ? { query: question, conversationId }
+      : { query: question };
 
-    const apiResponse = await api.askQuestion(requestData, conversationFeaturesAvailable);
+    const apiResponse = await api.askQuestion(requestData);
 
     // Refresh the sidebar so a newly created conversation appears and
     // the ordering reflects the latest activity.
@@ -518,45 +684,47 @@ const ChatInterface = () => {
   };
 
   // Load a conversation's messages when its sidebar item is clicked.
-  const handleSelectConversation = async (conversation) => {
-    if (!conversation || !conversation._id) return;
-    if (conversation._id === activeConversationId) return;
+  const handleSelectConversation = useCallback(
+    async (conversation) => {
+      if (!conversation || !conversation._id) return;
+      if (conversation._id === activeConversationId) return;
 
-    try {
-      setIsLoadingHistory(true);
-      const data = await api.getConversation(conversation._id);
-
-      const formattedMessages =
-        data && Array.isArray(data.messages)
-          ? data.messages.map((msg) => ({
-              type: msg.role === "user" ? "user" : "bot",
-              content: msg.content,
-              timestamp: msg.timestamp,
-            }))
-          : [];
-
-      setMessages(formattedMessages);
-      setCurrentStreamedText("");
+      // Cancel any in-flight stream so the pending bot reply can't leak
+      // into the conversation being opened.
+      cancelPendingTimers();
       setStreaming(false);
+      setCurrentStreamedText("");
       setLoading(false);
-      setActiveConversationId(conversation._id);
-      if (userId) {
-        localStorage.setItem(`conversationId_${userId}`, conversation._id);
+      setIsLoadingHistory(true);
+
+      try {
+        const data = await api.getConversation(conversation._id);
+
+        const formattedMessages =
+          data && Array.isArray(data.messages)
+            ? data.messages.map(formatConversationMessage)
+            : [];
+
+        setMessages(formattedMessages);
+        setActiveConversationId(conversation._id);
+        if (userId) {
+          localStorage.setItem(`conversationId_${userId}`, conversation._id);
+        }
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          makeLocalMessage("error", "Could not load that conversation."),
+        ]);
+      } finally {
+        setIsLoadingHistory(false);
       }
-      hasLoadedConversationRef.current = true;
-    } catch (error) {
-      console.error("Could not load conversation:", error);
-      setMessages((prev) => [
-        ...prev,
-        { type: "error", content: "Could not load that conversation." },
-      ]);
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
+    },
+    [activeConversationId, userId, cancelPendingTimers]
+  );
 
   // "New chat": clear the pane; the next send lazily creates a conversation.
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
+    cancelPendingTimers();
     setMessages([]);
     setCurrentStreamedText("");
     setStreaming(false);
@@ -565,287 +733,41 @@ const ChatInterface = () => {
     if (userId) {
       localStorage.removeItem(`conversationId_${userId}`);
     }
-    localStorage.removeItem("conversationId");
+    localStorage.removeItem("conversationId"); // legacy key cleanup
     inputRef.current?.focus();
-  };
+  }, [userId, cancelPendingTimers]);
 
   // Delete a conversation (soft delete on the backend).
-  const handleDeleteConversation = async (conversation) => {
-    if (!conversation || !conversation._id) return;
-    if (!window.confirm("Delete this conversation?")) return;
+  const handleDeleteConversation = useCallback(
+    async (conversation) => {
+      if (!conversation || !conversation._id) return;
+      if (!window.confirm("Delete this conversation?")) return;
 
-    try {
-      await api.deleteConversation(conversation._id);
-    } catch (error) {
-      console.error("Could not delete conversation:", error);
-    }
-
-    setConversations((prev) =>
-      prev.filter((c) => c._id !== conversation._id)
-    );
-
-    if (conversation._id === activeConversationId) {
-      handleNewChat();
-    }
-  };
-
-  // Load chat history and get user ID on component mount
-  useEffect(() => {
-    let isMounted = true; // Flag to prevent state updates after unmount
-    
-    const loadChatHistory = async () => {
       try {
-        // Prevent multiple simultaneous loads
-        if (isLoadingHistory) {
-          console.log("Already loading history, skipping");
-          return;
-        }
-        
-        // Don't load if we already have messages
-        if (messages.length > 0) {
-          console.log("Messages already loaded, skipping");
-          return;
-        }
-        
-        // Don't load if we've already loaded conversation for this session
-        if (hasLoadedConversationRef.current) {
-          console.log("Conversation already loaded in this session, skipping");
-          return;
-        }
-        
-        // Get user ID from auth token or localStorage
-        const token = localStorage.getItem("authToken");
-        if (token) {
-          // Extract user ID from token
-          const userId = extractUserIdFromToken(token);
-          
-          // Check global flag for this user
-          if (getGlobalConversationLoaded() && getGlobalCurrentUserId() === userId) {
-            console.log("Global flag indicates conversation already loaded for this user, skipping");
-            return;
-          }
-          
-          if (!isMounted) return; // Don't update state if component unmounted
-          setUserId(userId);
-          
-          // Check if this is a different user than before
-          const existingUserId = localStorage.getItem("currentUserId");
-          console.log("Current user ID:", userId);
-          console.log("Existing user ID:", existingUserId);
-          
-          if (existingUserId && existingUserId !== userId) {
-            // New user logged in, clear everything
-            console.log("New user detected, clearing all data");
-            clearUserData(true); // Reset global flags for new user
-            hasLoadedConversationRef.current = false; // Reset the ref for new user
-            setGlobalConversationLoaded(false); // Reset global flag for new user
-            setGlobalCurrentUserId(userId); // Update global user ID
-            
-            if (!isMounted) return; // Don't continue if component unmounted
-          }
-          
-          // Store current user ID
-          localStorage.setItem("currentUserId", userId);
-          
-          // Set global user ID if not set
-          if (!getGlobalCurrentUserId()) {
-            setGlobalCurrentUserId(userId);
-          }
-          
-          setIsLoadingHistory(true);
-          
-          // Try to load existing conversations
-          try {
-            console.log("Fetching conversations for user:", userId);
-            const conversations = await api.getConversations();
-            console.log("Received conversations:", conversations);
-            
-            if (!isMounted) return; // Don't update state if component unmounted
-
-            // Populate the sidebar list
-            setConversations(Array.isArray(conversations) ? conversations : []);
-
-            if (conversations && Array.isArray(conversations) && conversations.length > 0) {
-              // Get the most recent conversation
-              const latestConversation = conversations[0];
-              const conversationId = latestConversation._id;
-              console.log("Using conversation ID:", conversationId);
-              
-              // Store the conversation ID for future use (user-specific)
-              localStorage.setItem(`conversationId_${userId}`, conversationId);
-              setActiveConversationId(conversationId);
-              
-              // Load messages from the conversation
-              const conversation = await api.getConversation(conversationId);
-              console.log("Loaded conversation:", conversation);
-              
-              if (!isMounted) return; // Don't update state if component unmounted
-              
-              if (conversation && conversation.messages && Array.isArray(conversation.messages)) {
-                // Convert conversation messages to frontend format
-                const formattedMessages = conversation.messages.map(msg => ({
-                  type: msg.role === "user" ? "user" : "bot",
-                  content: msg.content,
-                  timestamp: msg.timestamp
-                }));
-                setMessages(formattedMessages);
-                hasLoadedConversationRef.current = true; // Mark as loaded
-                setGlobalConversationLoaded(true); // Set global flag
-                console.log("Conversation history loaded successfully, messages count:", formattedMessages.length);
-              }
-            } else {
-              // Create a new conversation if none exist
-              console.log("No conversations found, creating new one");
-              const newConversation = await api.createConversation({
-                title: "Egyptian History Chat"
-              });
-              
-              if (!isMounted) return; // Don't update state if component unmounted
-              
-              if (newConversation && newConversation._id) {
-                localStorage.setItem(`conversationId_${userId}`, newConversation._id);
-                setActiveConversationId(newConversation._id);
-                setConversations([newConversation]);
-                hasLoadedConversationRef.current = true; // Mark as loaded
-                setGlobalConversationLoaded(true); // Set global flag
-                console.log("New conversation created with ID:", newConversation._id);
-              }
-            }
-          } catch (conversationError) {
-            console.log("Conversation features not available, falling back to simple chat");
-            console.error("Conversation error details:", conversationError);
-            
-            if (isMounted) {
-              setConversationFeaturesAvailable(false);
-            }
-          }
-        } else {
-          console.log("No auth token found");
-        }
-      } catch (error) {
-        console.log("Could not initialize chat history");
-        console.error("Error details:", error);
-      } finally {
-        if (isMounted) {
-          setIsLoadingHistory(false);
-        }
+        await api.deleteConversation(conversation._id);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          makeLocalMessage("error", "Could not delete that conversation."),
+        ]);
+        return;
       }
-    };
 
-    if (ENABLE_CHAT_HISTORY) {
-      loadChatHistory();
-    }
-    
-    // Cleanup function to clear conversation data when component unmounts
-    return () => {
-      isMounted = false; // Prevent further state updates
-      console.log("Component unmounting, clearing user data");
-      localStorage.removeItem("currentUserId");
-      localStorage.removeItem("conversationId");
-    };
-  }, []); // Empty dependency array - only run once on mount
+      setConversations((prev) =>
+        prev.filter((c) => c._id !== conversation._id)
+      );
 
-  // Function to save message to conversation
-  const saveMessageToConversation = async (message) => {
-    if (!conversationFeaturesAvailable) return;
-    
-    try {
-      const conversationId = localStorage.getItem(`conversationId_${userId}`);
-      if (!conversationId) return;
-      
-      const messageData = {
-        role: message.type === "user" ? "user" : "assistant",
-        content: message.content
-      };
-      
-      await api.addMessageToConversation(conversationId, messageData);
-    } catch (error) {
-      console.log("Could not save message to conversation");
-      // Don't show error to user - chat should continue working
-    }
-  };
-
-  // Helper function to extract answer text
-  const extractAnswerText = (response) => {
-    if (typeof response === "string") {
-      if (response.trim().startsWith("{")) {
-        try {
-          const parsed = JSON.parse(response);
-          return parsed.answer || "";
-        } catch (e) {
-          return response;
-        }
+      if (conversation._id === activeConversationId) {
+        handleNewChat();
       }
-      return response;
-    }
-
-    if (response && typeof response === "object" && response.answer) {
-      return response.answer;
-    }
-
-    if (response && typeof response === "object" && response.response) {
-      return response.response;
-    }
-
-    return typeof response === "object"
-      ? JSON.stringify(response)
-      : String(response);
-  };
-
-  // Fixed streaming function to ensure the first letter appears
-  const simulateStreaming = (text) => {
-    // Clear any existing timeout to avoid conflicts
-    if (streamTimeoutRef.current) {
-      clearTimeout(streamTimeoutRef.current);
-    }
-
-    setStreaming(true);
-    // Start with an empty string
-    setCurrentStreamedText("");
-
-    // Break the text into characters
-    const textChunks = text.split("");
-    let currentIndex = 0;
-
-    // Explicit function to add chunks one by one
-    const addNextChunk = () => {
-      if (currentIndex < textChunks.length) {
-        // Explicitly update with exact current index
-        setCurrentStreamedText(textChunks.slice(0, currentIndex + 1).join(""));
-        currentIndex++;
-
-        // Store timeout reference for cleanup - much faster streaming
-        streamTimeoutRef.current = setTimeout(() => {
-          addNextChunk();
-        }, Math.floor(Math.random() * 3) + 2); // 2-5ms delay (was 10-25ms)
-      } else {
-        // Finished streaming, add to messages
-        finishStreaming(text);
-      }
-    };
-
-    // Start immediately with the first character
-    setCurrentStreamedText(textChunks[0]);
-    currentIndex = 1;
-
-    // Continue with the rest after a very short delay
-    streamTimeoutRef.current = setTimeout(() => {
-      addNextChunk();
-    }, Math.floor(Math.random() * 3) + 2); // 2-5ms delay (was 10-25ms)
-  };
+    },
+    [activeConversationId, handleNewChat]
+  );
 
   // Called when streaming is complete
   const finishStreaming = (completeText) => {
-    const botMessage = {
-      type: "bot",
-      content: completeText,
-    };
-    
-    setMessages((prev) => [...prev, botMessage]);
-    
-    // Save bot message to conversation
-    //saveMessageToConversation(botMessage);
-    
+    setMessages((prev) => [...prev, makeLocalMessage("bot", completeText)]);
+
     setStreaming(false);
     setCurrentStreamedText("");
     setLoading(false);
@@ -853,245 +775,120 @@ const ChatInterface = () => {
     // Generate and add follow-up suggestions
     const suggestions = generateFollowUpSuggestions(completeText);
     if (suggestions.length > 0) {
-      setTimeout(() => {
+      suggestionTimeoutRef.current = setTimeout(() => {
+        suggestionTimeoutRef.current = null;
         setMessages((prev) => [
           ...prev,
-          {
-            type: "suggestions",
-            content: "You might also want to ask:",
-            suggestions: suggestions,
-          },
+          makeLocalMessage("suggestions", "You might also want to ask:", {
+            suggestions,
+          }),
         ]);
-      }, 1000); // Add suggestions after a short delay
+      }, SUGGESTIONS_DELAY_MS);
     }
   };
 
-  // Helper function to detect vague questions and provide suggestions
-  const detectVagueQuestion = (question) => {
-    const vaguePatterns = [
-      /^what (is|does) (it|this|that) (mean|represent|refer to)\??$/i,
-      /^what (is|does) (it|this|that)\??$/i,
-      /^what about (it|this|that)\??$/i,
-      /^tell me more$/i,
-      /^explain$/i,
-      /^how$/i,
-      /^why$/i
-    ];
-    
-    return vaguePatterns.some(pattern => pattern.test(question.trim()));
-  };
+  // Reveal the answer progressively — ~4 chars per ~30ms tick instead of one
+  // re-render per character.
+  const simulateStreaming = (text) => {
+    cancelPendingTimers();
+    setStreaming(true);
+    setCurrentStreamedText("");
 
-  // Helper function to generate follow-up suggestions based on the last response
-  const generateFollowUpSuggestions = (lastResponse) => {
-    const suggestions = [];
-    
-    // Extract key topics from the response
-    const topics = {
-      pyramids: [
-        "How were the pyramids built?",
-        "Who were the pharaohs buried in pyramids?",
-        "What's inside the pyramids?",
-        "How long did it take to build the Great Pyramid?",
-        "What tools did they use to build pyramids?",
-        "Why were pyramids built in that shape?",
-        "How many pyramids are there in Egypt?",
-        "What was the purpose of the pyramid complex?",
-        "How did they transport the stones?",
-        "What's the significance of pyramid alignment?"
-      ],
-      temples: [
-        "What was the purpose of Egyptian temples?",
-        "How were temples decorated?",
-        "Who could enter temples?",
-        "What ceremonies took place in temples?",
-        "How were temples funded?",
-        "What's the difference between mortuary and cult temples?",
-        "How were temples oriented?",
-        "What role did priests play in temples?",
-        "How were temples maintained?",
-        "What happened during temple festivals?"
-      ],
-      pharaohs: [
-        "How did pharaohs rule Egypt?",
-        "What was the role of pharaohs in religion?",
-        "How were pharaohs chosen?",
-        "What powers did pharaohs have?",
-        "How did pharaohs communicate with the gods?",
-        "What was the pharaoh's daily life like?",
-        "How were pharaohs buried?",
-        "What titles did pharaohs have?",
-        "How did pharaohs maintain power?",
-        "What happened when a pharaoh died?"
-      ],
-      gods: [
-        "Who were the main Egyptian gods?",
-        "How did Egyptians worship their gods?",
-        "What were Egyptian religious beliefs?",
-        "What was the role of animal gods?",
-        "How were gods represented in art?",
-        "What were the major religious festivals?",
-        "How did gods influence daily life?",
-        "What was the relationship between gods and pharaohs?",
-        "How were gods worshipped in homes?",
-        "What happened to Egyptian religion over time?"
-      ],
-      afterlife: [
-        "What did Egyptians believe about the afterlife?",
-        "How did they prepare for death?",
-        "What was mummification?",
-        "What was the Book of the Dead?",
-        "How did they judge souls in the afterlife?",
-        "What was the journey to the afterlife like?",
-        "What did they bury with the dead?",
-        "How did they protect tombs?",
-        "What was the role of the heart in the afterlife?",
-        "How did beliefs about the afterlife change?"
-      ],
-      alexandria: [
-        "What was Alexandria like in ancient times?",
-        "Who founded Alexandria?",
-        "What was the Library of Alexandria?",
-        "What happened to the Pharos Lighthouse?",
-        "What was Cleopatra's role in Alexandria?",
-        "How did Alexandria become a center of learning?",
-        "What was the cultural mix in Alexandria?",
-        "How did Alexandria influence the Mediterranean?",
-        "What remains of ancient Alexandria today?",
-        "What was the significance of Alexandria's location?"
-      ],
-      cairo: [
-        "What was Cairo like in ancient times?",
-        "How did Cairo develop over time?",
-        "What are the oldest parts of Cairo?",
-        "What was the role of Cairo in Islamic Egypt?",
-        "How did Cairo become the capital?",
-        "What architectural styles are found in Cairo?",
-        "What was medieval Cairo like?",
-        "How did Cairo influence trade routes?",
-        "What are Cairo's most important monuments?",
-        "How has Cairo changed over centuries?"
-      ],
-      sphinx: [
-        "What is the Great Sphinx?",
-        "Who built the Sphinx?",
-        "What does the Sphinx represent?",
-        "How old is the Sphinx?",
-        "What was the Sphinx's original purpose?",
-        "How was the Sphinx carved?",
-        "What happened to the Sphinx's nose?",
-        "What's the connection between the Sphinx and pyramids?",
-        "How has the Sphinx been restored?",
-        "What mysteries surround the Sphinx?"
-      ],
-      valley: [
-        "What is the Valley of the Kings?",
-        "Why was it chosen for royal burials?",
-        "How many tombs are in the Valley?",
-        "What was the most famous discovery there?",
-        "How were the tombs decorated?",
-        "What was the purpose of the valley?",
-        "How did they protect the tombs?",
-        "What happened to the valley over time?",
-        "How were the tombs discovered?",
-        "What treasures were found in the valley?"
-      ],
-      nile: [
-        "What was the importance of the Nile?",
-        "How did the Nile shape Egyptian civilization?",
-        "What was the annual flooding like?",
-        "How did Egyptians use the Nile for transport?",
-        "What was the Nile's role in agriculture?",
-        "How did the Nile influence religion?",
-        "What was the Nile's role in trade?",
-        "How did they navigate the Nile?",
-        "What was the Nile's role in warfare?",
-        "How has the Nile changed over time?"
-      ],
-      hieroglyphs: [
-        "What are hieroglyphs?",
-        "How were hieroglyphs deciphered?",
-        "What was the Rosetta Stone?",
-        "How many hieroglyphic symbols were there?",
-        "Who could read and write hieroglyphs?",
-        "How were hieroglyphs used?",
-        "What other writing systems did Egyptians use?",
-        "How did hieroglyphs evolve?",
-        "What was the purpose of hieroglyphs?",
-        "How do we translate hieroglyphs today?"
-      ]
+    if (text.length <= STREAM_CHUNK_SIZE) {
+      finishStreaming(text);
+      return;
+    }
+
+    let index = STREAM_CHUNK_SIZE;
+    setCurrentStreamedText(text.slice(0, index));
+
+    const showNextChunk = () => {
+      index += STREAM_CHUNK_SIZE;
+      if (index < text.length) {
+        setCurrentStreamedText(text.slice(0, index));
+        streamTimeoutRef.current = setTimeout(showNextChunk, STREAM_DELAY_MS);
+      } else {
+        streamTimeoutRef.current = null;
+        finishStreaming(text);
+      }
     };
-    
-    // Simple keyword matching to suggest relevant questions
-    const responseLower = lastResponse.toLowerCase();
-    
-    // Check for multiple topics and collect all relevant suggestions
-    const allSuggestions = [];
-    
-    if (responseLower.includes("pyramid")) {
-      allSuggestions.push(...topics.pyramids);
-    }
-    if (responseLower.includes("temple")) {
-      allSuggestions.push(...topics.temples);
-    }
-    if (responseLower.includes("pharaoh") || responseLower.includes("king")) {
-      allSuggestions.push(...topics.pharaohs);
-    }
-    if (responseLower.includes("god") || responseLower.includes("religious")) {
-      allSuggestions.push(...topics.gods);
-    }
-    if (responseLower.includes("afterlife") || responseLower.includes("death") || responseLower.includes("mummy")) {
-      allSuggestions.push(...topics.afterlife);
-    }
-    if (responseLower.includes("alexandria")) {
-      allSuggestions.push(...topics.alexandria);
-    }
-    if (responseLower.includes("cairo")) {
-      allSuggestions.push(...topics.cairo);
-    }
-    if (responseLower.includes("sphinx")) {
-      allSuggestions.push(...topics.sphinx);
-    }
-    if (responseLower.includes("valley") || responseLower.includes("tomb")) {
-      allSuggestions.push(...topics.valley);
-    }
-    if (responseLower.includes("nile")) {
-      allSuggestions.push(...topics.nile);
-    }
-    if (responseLower.includes("hieroglyph") || responseLower.includes("writing") || responseLower.includes("rosetta")) {
-      allSuggestions.push(...topics.hieroglyphs);
-    }
-    
-    // If no specific topics found, add some general questions
-    if (allSuggestions.length === 0) {
-      allSuggestions.push(
-        "What was daily life like in ancient Egypt?",
-        "How did ancient Egyptians view time?",
-        "What was the role of women in ancient Egypt?",
-        "How did ancient Egyptians trade with other civilizations?",
-        "What was the education system like?",
-        "How did ancient Egyptians measure time?",
-        "What was the role of music in ancient Egypt?",
-        "How did ancient Egyptians view foreigners?",
-        "What was the role of magic in ancient Egypt?",
-        "How did ancient Egyptians view the stars?"
-      );
-    }
-    
-    // Remove duplicates and shuffle the array
-    const uniqueSuggestions = [...new Set(allSuggestions)];
-    const shuffledSuggestions = uniqueSuggestions.sort(() => Math.random() - 0.5);
-    
-    // Return first 3 random suggestions
-    return shuffledSuggestions.slice(0, 3);
+
+    streamTimeoutRef.current = setTimeout(showNextChunk, STREAM_DELAY_MS);
   };
 
+  // Shared send path used by the send button, Enter, and suggestion buttons.
+  const sendQuestion = async (question) => {
+    const trimmed = (question || "").trim();
+    if (!trimmed || loading || streaming || isLoadingHistory) return;
+
+    cancelPendingTimers(); // never run two streams at once
+    setMessages((prev) => [...prev, makeLocalMessage("user", trimmed)]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const apiResponse = await askWithConversation(trimmed);
+      simulateStreaming(extractAnswerText(apiResponse));
+    } catch (error) {
+      // A 400 while conversation features are enabled means the backend
+      // rejected the conversation payload — retry once as a plain query.
+      if (error.response?.status === 400 && conversationFeaturesAvailable) {
+        setConversationFeaturesAvailable(false);
+        try {
+          const retryResponse = await api.askQuestion({ query: trimmed });
+          simulateStreaming(extractAnswerText(retryResponse));
+          return;
+        } catch (retryError) {
+          setMessages((prev) => [
+            ...prev,
+            makeLocalMessage(
+              "error",
+              retryError.response?.data?.message || GENERIC_ERROR_MESSAGE
+            ),
+          ]);
+          setLoading(false);
+          return;
+        }
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        makeLocalMessage(
+          "error",
+          error.response?.data?.message || GENERIC_ERROR_MESSAGE
+        ),
+      ]);
+      setLoading(false);
+    }
+  };
+
+  const handleSend = () => {
+    const trimmed = input.trim();
+    if (!trimmed || loading || streaming) return;
+
+    // For a vague first question, guide the user instead of querying.
+    if (messages.length === 0 && detectVagueQuestion(trimmed)) {
+      setMessages([
+        makeLocalMessage(
+          "bot",
+          "I'd be happy to help! To get the most accurate answer, please be more specific about what you'd like to know. For example:\n\n• \"What does the Great Pyramid represent?\"\n• \"What does the Sphinx symbolize?\"\n• \"What does the Eye of Horus mean?\"\n\nWhat specific aspect of Egyptian history would you like to learn about?"
+        ),
+      ]);
+      setInput("");
+      return;
+    }
+
+    sendQuestion(trimmed);
+  };
+
+  // Swap the themed background image based on the latest user message.
   useEffect(() => {
     const lastUserMessage = [...messages]
       .reverse()
       .find((msg) => msg.type === "user");
     const query = lastUserMessage ? lastUserMessage.content.toLowerCase() : "";
 
-    const match = inputData.find((item) =>
+    const match = BACKGROUND_IMAGE_RULES.find((item) =>
       item.keywords.some((keyword) => query.includes(keyword.toLowerCase()))
     );
 
@@ -1100,100 +897,20 @@ const ChatInterface = () => {
     if (newImage !== backgroundImage) {
       setFade(true); // trigger fade-out
 
-      setTimeout(() => {
+      const fadeTimeout = setTimeout(() => {
         setBackgroundImage(newImage);
         setFade(false); // fade-in new background
       }, 400); // half of the transition duration
+
+      return () => clearTimeout(fadeTimeout);
     }
-  }, [messages]);
+  }, [messages, backgroundImage]);
 
-  const handleSend = async () => {
-    if (!input.trim()) {
-      return;
-    }
-
-    // Check for vague questions and provide guidance
-    if (detectVagueQuestion(input) && messages.length === 0) {
-      const guidanceMessage = {
-        type: "bot",
-        content: "I'd be happy to help! To get the most accurate answer, please be more specific about what you'd like to know. For example:\n\n• \"What does the Great Pyramid represent?\"\n• \"What does the Sphinx symbolize?\"\n• \"What does the Eye of Horus mean?\"\n\nWhat specific aspect of Egyptian history would you like to learn about?"
-      };
-      setMessages([guidanceMessage]);
-      setInput("");
-      return;
-    }
-
-    const userMessage = { type: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
-    
-    // Save user message to conversation
-    //saveMessageToConversation(userMessage);
-    
-    setInput("");
-    setLoading(true);
-
-    try {
-      console.log("Sending question to API:", input.trim());
-
-      const apiResponse = await askWithConversation(input.trim());
-      console.log("Raw API response:", apiResponse);
-
-      // Extract only the answer text
-      const answerText = extractAnswerText(apiResponse);
-      console.log("Extracted answer text:", answerText);
-
-      // Stream the response
-      simulateStreaming(answerText);
-    } catch (error) {
-      console.error("Chat API error:", error);
-
-      // If we get a 400 error and we were trying to use conversation features,
-      // disable them for future requests
-      if (error.response?.status === 400 && conversationFeaturesAvailable) {
-        console.log("Conversation features not available, disabling for future requests");
-        setConversationFeaturesAvailable(false);
-        
-        // Retry with simple query
-        try {
-          const simpleResponse = await api.askQuestion(input.trim());
-          const answerText = extractAnswerText(simpleResponse);
-          simulateStreaming(answerText);
-          return;
-        } catch (retryError) {
-          console.error("Retry also failed:", retryError);
-        }
-      }
-
-      const errorMessage = {
-        type: "error",
-        content:
-          error.response?.data?.message ||
-          error.message ||
-          "Sorry, I encountered an error processing your request.",
-      };
-
-      setMessages((prev) => [...prev, errorMessage]);
-      setLoading(false);
-    }
-  };
   const handleKeyPress = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  // Function to handle user logout
-  const handleLogout = () => {
-    console.log("User logging out, clearing all data");
-    clearUserData(true); // Reset global flags
-    setUserId(null);
-    // Remove auth token
-    localStorage.removeItem("authToken");
-    // Reset global flags
-    setGlobalConversationLoaded(false);
-    setGlobalCurrentUserId(null);
-    resetLoggingFlags(); // Reset logging flags
   };
 
   return (
@@ -1210,7 +927,7 @@ const ChatInterface = () => {
         <h2>🏺 Egyptian History Assistant</h2>
         <p>Powered by RAG Technology</p>
         <div style={{ position: 'absolute', top: '10px', right: '10px' }}>
-          <button 
+          <button
             onClick={() => {
               api.logout();
               window.location.href = '/'; // Redirect to login page
@@ -1229,8 +946,6 @@ const ChatInterface = () => {
           </button>
         </div>
       </header>
-      {/* <img src={backgroundChanger() || pyramids} alt="" className="imgCover" /> */}
-      {/* <img src={backgroundImage} alt="" className="imgCover fade-bg" /> */}
       <img
         src={backgroundImage}
         alt=""
@@ -1240,7 +955,7 @@ const ChatInterface = () => {
       <div className="chat-messages h-100">
         {messages.map((msg, index) => (
           <div
-            key={index}
+            key={messageKey(msg, index)}
             className={`message-wrapper ${
               msg.type === "user" ? "user-wrapper" : "bot-wrapper"
             }`}
@@ -1256,64 +971,16 @@ const ChatInterface = () => {
 
             <div className={`message ${msg.type}`}>
               <div className="message-content">{msg.content}</div>
-              
+
               {/* Render suggestions if available */}
               {msg.type === "suggestions" && msg.suggestions && (
                 <div className="suggestions-container">
-                  {msg.suggestions.map((suggestion, suggestionIndex) => (
+                  {msg.suggestions.map((suggestion) => (
                     <button
-                      key={suggestionIndex}
+                      key={suggestion}
                       className="suggestion-button"
-                      onClick={() => {
-                        setInput(suggestion);
-                        // Auto-send the suggestion
-                        setTimeout(() => {
-                          const userMessage = { type: "user", content: suggestion };
-                          setMessages((prev) => [...prev, userMessage]);
-                          
-                          // Save user message to conversation
-                          //saveMessageToConversation(userMessage);
-                          
-                          setInput("");
-                          setLoading(true);
-                          
-                          // Send the suggestion to API
-                          askWithConversation(suggestion)
-                            .then((apiResponse) => {
-                              const answerText = extractAnswerText(apiResponse);
-                              simulateStreaming(answerText);
-                            })
-                            .catch((error) => {
-                              console.error("Chat API error:", error);
-                              
-                              // If conversation features fail, retry with simple query
-                              if (error.response?.status === 400 && conversationFeaturesAvailable) {
-                                setConversationFeaturesAvailable(false);
-                                api.askQuestion(suggestion, conversationFeaturesAvailable)
-                                  .then((simpleResponse) => {
-                                    const answerText = extractAnswerText(simpleResponse);
-                                    simulateStreaming(answerText);
-                                  })
-                                  .catch((retryError) => {
-                                    console.error("Retry also failed:", retryError);
-                                    const errorMessage = {
-                                      type: "error",
-                                      content: "Sorry, I encountered an error processing your request.",
-                                    };
-                                    setMessages((prev) => [...prev, errorMessage]);
-                                    setLoading(false);
-                                  });
-                              } else {
-                                const errorMessage = {
-                                  type: "error",
-                                  content: "Sorry, I encountered an error processing your request.",
-                                };
-                                setMessages((prev) => [...prev, errorMessage]);
-                                setLoading(false);
-                              }
-                            });
-                        }, 100);
-                      }}
+                      disabled={loading || streaming}
+                      onClick={() => sendQuestion(suggestion)}
                     >
                       {suggestion}
                     </button>
@@ -1323,6 +990,12 @@ const ChatInterface = () => {
             </div>
           </div>
         ))}
+
+        {isLoadingHistory && messages.length === 0 && (
+          <div className="welcome-message">
+            <p>Loading conversation…</p>
+          </div>
+        )}
 
         {streaming && (
           <div className="message-wrapper bot-wrapper">
@@ -1340,7 +1013,8 @@ const ChatInterface = () => {
 
       <div className="chat-input-container">
         <div className="chat-input-wrapper">
-          <input
+          <textarea
+            ref={inputRef}
             className="chat-input"
             placeholder="Type your message..."
             value={input}
@@ -1351,7 +1025,7 @@ const ChatInterface = () => {
           <button
             className="send-button"
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() || loading || streaming}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -1365,7 +1039,7 @@ const ChatInterface = () => {
           </button>
         </div>
         <div className="input-footer">
-          <div className="input-hint">Press Enter to send</div>
+          <div className="input-hint">Press Enter to send, Shift+Enter for a new line</div>
         </div>
       </div>
     </div>

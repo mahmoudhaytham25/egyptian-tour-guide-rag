@@ -29,7 +29,7 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
         onDocumentUploaded();
       }
     } catch (error) {
-      setMessage(`Error: ${error.response?.data?.error || 'Failed to upload document'}`);
+      setMessage(`Error: ${error.response?.data?.message || 'Failed to upload document'}`);
     } finally {
       setUploading(false);
       setFile(null);

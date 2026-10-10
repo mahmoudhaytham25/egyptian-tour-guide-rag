@@ -1,43 +1,36 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom"; // Import useNavigate
+import { Link, useNavigate } from "react-router-dom";
 import API from "../../services/api";
-import "../../../node_modules/bootstrap/dist/css/bootstrap.min.css";
 import "./LoginStyle.css";
 import logo from "../../Assets/Images/FacultyLogo.png";
-// import BackButton from "../smallComponents/backButton";
-// import Navbar from "../navbar/navbar";
+
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const navigate = useNavigate(); // Use React Router navigation
- 
+  const [submitting, setSubmitting] = useState(false);
+  const navigate = useNavigate();
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    try {
-      console.log("Attempting login with email:", email);
-      const res = await API.login({ email, password }); 
-      console.log("Backend response: ", res);
-      console.log("Login successful for email:", email);
-      
-      // Navigate to home page using React Router
-      navigate("/home");
+    if (submitting) return;
 
+    setError("");
+    setSubmitting(true);
+    try {
+      await API.login({ email, password });
+      navigate("/chat");
     } catch (err) {
-      console.error("Login error:", err);
-      setError("Invalid credentials");
+      setError(
+        err.response?.data?.message || "Network error. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
     }
-  };
-  const forgetPasswrod = () => {
-    // write code to contact backend in order to update the password of a user
   };
 
   return (
     <>
-      {/* <Link to="/">
-        <i className="fa-solid fa-angle-left"></i>
-      </Link> */}
-      {/* <BackButton /> */}
       <div className="container h-100">
         <div className="w-100">
           <form
@@ -46,34 +39,37 @@ const Login = () => {
           >
             <h1>Sign in</h1>
             <input
-              className=" form-control "
+              className="form-control"
               type="email"
               placeholder="Email"
+              value={email}
               onChange={(e) => setEmail(e.target.value)}
+              required
             />
             <input
-              className=" form-control "
+              className="form-control"
               type="password"
               placeholder="Password"
+              value={password}
               onChange={(e) => setPassword(e.target.value)}
+              required
             />
             <div className="loginBtn">
-              <button type="submit" className="btn btn-primary m-2">
-                Login
-              </button>
               <button
                 type="submit"
-                className="btn btn-secondary mb-1"
-                onClick={forgetPasswrod}
-                style={{fontSize: "small"}}
+                className="btn btn-primary m-2"
+                disabled={submitting}
               >
-                Forget Password
+                {submitting ? "Signing in..." : "Login"}
               </button>
-              {error && <p>{error}</p>}
+              {error && (
+                <div className="alert alert-danger" role="alert">
+                  {error}
+                </div>
+              )}
               <p id="registerLink">
                 Don't have an account?
-                <Link to="/register"> Register here</Link>{" "}
-                {/* Link to the Register page */}
+                <Link to="/register"> Register here</Link>
               </p>
             </div>
           </form>
@@ -82,7 +78,7 @@ const Login = () => {
           className="d-flex justify-content-center align-items-center"
           id="imgDiv"
         >
-          <img src={logo} alt="" className="loginImg" style={{width:"150%"}}/>
+          <img src={logo} alt="" className="loginImg" style={{ width: "150%" }} />
         </div>
       </div>
     </>

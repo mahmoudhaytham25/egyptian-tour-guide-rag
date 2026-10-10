@@ -110,4 +110,4 @@ const HistoryDisplay = ({
   );
 };
 
-export default HistoryDisplay;
+export default React.memo(HistoryDisplay);

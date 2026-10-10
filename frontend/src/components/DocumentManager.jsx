@@ -14,7 +14,6 @@ const DocumentManager = () => {
     try {
       setLoading(true);
       const data = await api.getDocuments();
-      console.log("Fetched documents:", data.documents);
       setDocuments(data.documents || []);
     } catch (error) {
       console.error('Error fetching documents:', error);
@@ -35,14 +34,11 @@ const DocumentManager = () => {
   useEffect(() => {
     if (!pollingActive) return;
 
-    console.log("Starting indexing status polling");
-
     const interval = setInterval(async () => {
       try {
         // Get indexing status from API
         const response = await api.getIndexingStatus();
         const status = response.status;
-        console.log("Polling status:", status);
 
         if (!status) {
           setStatusMessage('Error checking indexing status');

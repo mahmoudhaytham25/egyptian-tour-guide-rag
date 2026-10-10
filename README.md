@@ -9,7 +9,7 @@ A full-stack agentic chatbot for Egyptian tourism. It answers questions grounded
 - **Document-grounded Q&A** — upload Egyptian history PDFs (1000+ pages supported), index them, and ask questions; answers cite source document pages
 - **Conversational agent** — classifies incoming prompts as RAG queries vs. casual conversation and responds accordingly, with query enhancement for follow-ups ("When did *he* rule Egypt?")
 - **Trip scheduling** — generates day itineraries using a curated monuments dataset (locations, opening times)
-- **User accounts** — JWT auth with email verification, isolated per-user conversations, persistent chat history in MongoDB
+- **User accounts** — JWT auth, isolated per-user conversations, persistent chat history in MongoDB
 - **Document management UI** — upload, index, and track indexing status from the React frontend
 
 ## Screenshots
@@ -25,7 +25,8 @@ frontend/          React SPA (port 3000) — chat UI, document management, auth
      │
 backend/           Express API (port 3001) — JWT auth, conversations, RAG endpoints
      │                              └─ calls model-server /query + /index over HTTP
-model-server/      Flask model services (port 5050) + RAG pipeline
+model-server/      Flask model services via gunicorn (port 5050, internal
+                   only — requires the backend's X-Internal-Token) + RAG pipeline
                    ├─ rag/          classifier, indexer, retriever, generator
                    ├─ models/       Gemini 3.8 Flash LLM + Gemini embeddings (gemini-embedding-001)
                    ├─ data/         uploaded PDFs (incl. bundled egyptian_history.pdf)
@@ -52,7 +53,7 @@ docker compose up --build
 Then open http://localhost:3000.
 
 - **`GEMINI_API_KEY`** is required by the model server — get one at [Google AI Studio](https://aistudio.google.com/app/apikey).
-- **`JWT_SECRET`** is optional; compose falls back to a dev-only value. Set a long random string for real deployments.
+- **`JWT_SECRET`** and **`INTERNAL_API_TOKEN`** are required — compose refuses to start without them (no insecure defaults). Generate with `openssl rand -hex 32`. `INTERNAL_API_TOKEN` is the shared secret the backend sends to the model server as `X-Internal-Token` — the model server is not reachable from the host and rejects unauthenticated calls.
 - `GEMINI_API_KEY` is required for indexing AND querying — embeddings run through the Gemini API too (`gemini-embedding-001`), so there is no model download and first start is fast. If you previously indexed with the old local model, re-index: the new embeddings are incompatible with old vector files.
 - Named volumes keep MongoDB data, uploaded PDFs (`rag-data`, seeded with `data/egyptian_history.pdf`), and the generated vector index (`vector-store`) persistent across restarts. Upload a PDF + index it once (Documents UI) or re-index the bundled PDF after a fresh `up`.
 - **Free-tier quota caveat:** on a free Google AI Studio key, generation (`gemini-3.8-flash`) is limited to ~5 requests/min and ~20 requests/day — and each user query fires *up to 3* generate calls (intent classification, optional query enhancement, answer). Embeddings count ~1 quota unit *per text* against ~100/min, so indexing the bundled 1,275-page PDF (~3,800 chunks) takes ~40 min of quota pacing. A paid key removes these limits.
@@ -63,7 +64,7 @@ Then open http://localhost:3000.
 2. **API** — `cd backend && npm install && npm start` (port 3001)
 3. **Frontend** — `cd frontend && npm install && npm start` (port 3000)
 
-Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
+Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Both services need `INTERNAL_API_TOKEN` set to the *same* value (the backend sends it as `X-Internal-Token` when calling the model server). Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
 
 ### Database migrations
 

@@ -294,6 +294,11 @@ body {
   margin: 0 auto;
 }
 
+.chat-page-main {
+  padding: 20px;
+  height: 650px;
+}
+
 .chat-page header {
   margin-bottom: 20px;
   display: flex;

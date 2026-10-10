@@ -211,6 +211,13 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
+.suggestion-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .bot-label {
   display: flex;
   align-items: center;
@@ -303,6 +310,9 @@
   transition: all 0.2s ease;
   outline: none;
   color: #333;
+  /* The field is a <textarea> so Shift+Enter can add line breaks */
+  font-family: inherit;
+  resize: none;
 }
 
 .send-button {

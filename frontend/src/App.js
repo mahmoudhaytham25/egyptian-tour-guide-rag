@@ -1,10 +1,10 @@
 // src/App.js
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Home from './pages/Home';
-import Chat from './pages/Chat';
 import Login from './components/Auth/Login'
 import Signup from './components/Auth/Register'
+import RequireAuth from './components/Auth/RequireAuth';
 import './App.css';
 
 function App() {
@@ -14,8 +14,18 @@ function App() {
         <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/register" element={<Signup />} />
-          <Route path="/chat" element={<Chat />} /> 
-          <Route path="/home" element={<Home />} /> 
+          {/* /chat is the canonical authenticated page (chat + knowledge base). */}
+          <Route
+            path="/chat"
+            element={
+              <RequireAuth>
+                <Home />
+              </RequireAuth>
+            }
+          />
+          {/* Legacy duplicate route — kept as a redirect so old links work. */}
+          <Route path="/home" element={<Navigate to="/chat" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
     </Router>

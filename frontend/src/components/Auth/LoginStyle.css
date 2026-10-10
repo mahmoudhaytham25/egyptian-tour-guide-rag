@@ -219,12 +219,14 @@ img {
     /* .imgDivClass{
         display: none;
     } */
-    select,
-    textarea {
+    /* Scoped to auth forms so it can't affect the chat <textarea> —
+       this file's styles are global once loaded. */
+    form select,
+    form textarea {
         width: 75% !important;
     }
 
-    textarea {
+    form textarea {
         resize: none !important;
         height: 200px !important;
     }

@@ -1,19 +1,21 @@
 // src/components/auth/Register.jsx
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import API from "../../services/api";          // <- must expose signup / chat helpers
-import "../../../node_modules/bootstrap/dist/css/bootstrap.min.css";
+import API from "../../services/api";
 import "./LoginStyle.css";
 import logo from "../../Assets/Images/FacultyLogo.png";
+
+const MIN_PASSWORD_LENGTH = 8;
 
 const Register = () => {
   const navigate = useNavigate();
 
   /* form state — the backend User model only stores email + password */
-  const [email, setEmail]                 = useState("");
-  const [password, setPassword]           = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   /* live confirm-password feedback (Bootstrap is-valid/is-invalid classes) */
   const confirmTouched = confirmPassword.length > 0;
@@ -27,73 +29,47 @@ const Register = () => {
   /* main submit */
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setErrorMessage(""); // Clear previous error messages
+    if (submitting) return;
+    setErrorMessage("");
 
-    // Basic validation
+    // Basic validation (mirrors the backend rules)
     if (!email || !password) {
       setErrorMessage("Please fill in all required fields.");
       return;
     }
-
-    // Check if passwords match
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setErrorMessage(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
     if (!passwordsMatch) {
       setErrorMessage("Passwords do not match.");
       return;
     }
 
+    setSubmitting(true);
     try {
-      /* 1. sign the user up — backend only reads { email, password } */
       const { token } = await API.signup({ email, password });
-      
-      // store token (adapt to your auth flow)
-      localStorage.setItem("authToken", token);
 
-      /* 2. set auth header for subsequent calls */
+      if (!token) {
+        setErrorMessage(
+          "Account created, but no session was returned. Please log in."
+        );
+        return;
+      }
       API.setAuthToken(token);
 
-      /* 3. try to fetch existing conversations */
-      let conversationId = null;
-      const convList = await API.getConversations();   // GET /chat/conversations
-      if (Array.isArray(convList) && convList.length) {
-        conversationId = convList[0]._id;              // pick the first active one
-      } else {
-        /* 4. create a conversation because none exist */
-        const newConv = await API.createConversation({
-          title: "My first conversation"
-        });                                            // POST /chat/conversations
-        conversationId = newConv._id;
-      }
-
-      /* 5. persist the id for later queries */
-      localStorage.setItem("conversationId", conversationId);
-
-      /* 6. redirect */
-      navigate("/");
+      /* Conversations are created lazily on the first chat message,
+         so there is nothing else to provision — go straight to chat. */
+      navigate("/chat");
     } catch (err) {
-      console.error("Registration flow failed:", err);
-      
-      // Handle specific error cases
-      if (err.response) {
-        const { status, data } = err.response;
-        
-        switch (status) {
-          case 409:
-            setErrorMessage("An account with this email already exists. Please try logging in instead.");
-            break;
-          case 400:
-            setErrorMessage(data.message || "Invalid registration data. Please check your information.");
-            break;
-          case 500:
-            setErrorMessage("Server error. Please try again later.");
-            break;
-          default:
-            setErrorMessage("Registration failed. Please try again.");
-        }
-      } else if (err.request) {
-        setErrorMessage("Network error. Please check your connection and try again.");
-      } else {
-        setErrorMessage("Registration failed. Please try again.");
-      }
+      setErrorMessage(
+        err.response?.data?.message ||
+          (err.request
+            ? "Network error. Please check your connection and try again."
+            : "Registration failed. Please try again.")
+      );
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -125,6 +101,7 @@ const Register = () => {
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              minLength={MIN_PASSWORD_LENGTH}
               required
             />
             <input
@@ -141,8 +118,12 @@ const Register = () => {
                 Passwords do not match.
               </p>
             )}
-            <button className="btn btn-primary m-2" type="submit">
-              Register
+            <button
+              className="btn btn-primary m-2"
+              type="submit"
+              disabled={submitting}
+            >
+              {submitting ? "Registering..." : "Register"}
             </button>
             <p className="mt-3">
               Already have an account? <Link to="/">Login here</Link>
