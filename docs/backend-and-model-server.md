@@ -557,8 +557,7 @@ egyptian-tour-guide-rag/
 │   ├── model_server.py                # Flask app for Gemini 3.8 & embeddings
 │   ├── models/
 │   │   ├── embedding.py               # Embedding model wrapper
-│   │   ├── llm.py                     # Gemini 3.8 Flash interface
-│   │   └── reranker.py                # Result reranking
+│   │   └── llm.py                     # Gemini 3.8 Flash interface
 │   ├── rag/
 │   │   ├── classifier.py              # Prompt type classification
 │   │   ├── indexer.py                 # PDF chunking/indexing

@@ -21,14 +21,10 @@ router.post('/conversations/:id/messages', chatController.addMessage);
 // Update conversation details (title, etc.)
 router.put('/conversations/:id', chatController.updateConversation);
 
-// Delete a conversation (soft delete)
-//router.delete('/conversations/:id', chatController.deleteConversation);
+// Soft delete
+router.delete('/conversations/:id', chatController.deleteConversation);
 
-// Original delete route (soft delete)
-router.delete('/conversations/:id', auth, chatController.deleteConversation);
-
-// Optional: Add a new route for permanent deletion
-router.delete('/conversations/:id/permanent', auth, chatController.hardDeleteConversation);
-
+// Permanent deletion
+router.delete('/conversations/:id/permanent', chatController.hardDeleteConversation);
 
 module.exports = router;

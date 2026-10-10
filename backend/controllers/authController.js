@@ -1,66 +1,77 @@
 const User = require('../models/user');
 const jwt = require('jsonwebtoken');
-const { sendVerificationEmail } = require('../services/emailService');
 const bcrypt = require('bcryptjs');
+const { HttpError } = require('../middleware/errors');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+const TOKEN_TTL = '12h';
+
+function normalizeEmail(raw) {
+  return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+}
+
+function signToken(user) {
+  return jwt.sign(
+    { id: user._id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: TOKEN_TTL }
+  );
+}
 
 exports.signup = async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    let user = await User.findOne({ email });
-    if (user) return res.status(409).json({ message: 'Email already in use.' });
+  const body = req.body || {};
+  const email = normalizeEmail(body.email);
+  const { password } = body;
 
-    user = new User({ email, password });
-    // Auto-verify for development
-    user.verified = true;
-    await user.save();
-
-    // Skip email verification
-    // const link = `http://localhost:3000/api/auth/verify/${token}`;
-    // await sendVerificationEmail(email, link);
-
-    res.status(201).json({ 
-      message: 'Signup successful. Account automatically verified for development.',
-      // Optionally return a token so they can login immediately
-      token: jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' })
-    });
-  } catch (err) {
-    res.status(500).json({ message: 'Signup failed.', error: err.message });
+  if (!EMAIL_RE.test(email)) {
+    throw new HttpError(400, 'A valid email is required');
   }
-};
-
-exports.verify = async (req, res) => {
-  const { token } = req.params;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id);
-
-    if (!user) return res.status(400).json({ message: 'Invalid token.' });
-    if (user.verified) return res.status(200).json({ message: 'Already verified.' });
-
-    user.verified = true;
-    user.verificationToken = undefined;
-    user.verificationTokenExpires = undefined;
-    await user.save();
-
-    res.status(200).json({ message: 'Email verified! You can now log in.' });
-  } catch (err) {
-    res.status(400).json({ message: 'Verification failed.', error: err.message });
+  if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+    throw new HttpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
   }
+
+  const existing = await User.findOne({ email });
+  if (existing) {
+    throw new HttpError(409, 'Email already in use.');
+  }
+
+  const user = new User({ email, password });
+  // Accounts are auto-verified; email verification was removed along with
+  // the mailer dependency — the `verified` flag remains for existing users.
+  user.verified = true;
+  await user.save();
+
+  res.status(201).json({
+    message: 'Signup successful.',
+    token: signToken(user)
+  });
 };
 
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: 'Invalid credentials.' });
-    if (!user.verified) return res.status(401).json({ message: 'Please verify your email.' });
+  const body = req.body || {};
+  const email = normalizeEmail(body.email);
+  const { password } = body;
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials.' });
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
-    res.status(200).json({ token, userId: user._id });
-  } catch (err) {
-    res.status(500).json({ message: 'Login failed.', error: err.message });
+  if (!EMAIL_RE.test(email)) {
+    throw new HttpError(400, 'A valid email is required');
   }
+  if (typeof password !== 'string' || !password) {
+    throw new HttpError(400, 'Password is required');
+  }
+
+  const user = await User.findOne({ email });
+  if (!user) {
+    throw new HttpError(401, 'Invalid credentials.');
+  }
+  if (!user.verified) {
+    throw new HttpError(401, 'Please verify your email.');
+  }
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    throw new HttpError(401, 'Invalid credentials.');
+  }
+
+  res.status(200).json({ token: signToken(user), userId: user._id });
 };

@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import tempfile
 import logging
 import argparse
 from tqdm import tqdm
@@ -30,6 +31,12 @@ class PDFIndexer:
             chunk_overlap (int): Overlap between chunks in characters
             batch_size (int): Batch size for processing
         """
+        # chunk_overlap >= chunk_size would make the chunking cursor stop
+        # advancing (or move backwards) and infinite-loop in split_into_chunks
+        if chunk_overlap >= chunk_size:
+            raise ValueError(
+                f"chunk_overlap ({chunk_overlap}) must be smaller than chunk_size ({chunk_size})"
+            )
         self.pdf_path = pdf_path
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -175,13 +182,35 @@ class PDFIndexer:
             bool: Success status
         """
         try:
+            # Write each file to a temp path in the same directory, then
+            # os.replace it into place — atomic on POSIX, so a concurrent
+            # query can never observe a half-written vector store.
             logger.info(f"Saving vectors to {self.vector_file}")
-            np.savez_compressed(self.vector_file, embeddings=embeddings)
-            
+            fd, tmp_vectors = tempfile.mkstemp(
+                dir=self.vector_store_dir, prefix=".tmp-vectors-", suffix=".npz"
+            )
+            try:
+                os.close(fd)
+                # tmp path already ends in .npz so savez_compressed won't
+                # append a second extension
+                np.savez_compressed(tmp_vectors, embeddings=embeddings)
+                os.replace(tmp_vectors, self.vector_file)
+            finally:
+                if os.path.exists(tmp_vectors):
+                    os.unlink(tmp_vectors)
+
             logger.info(f"Saving metadata to {self.metadata_file}")
-            with open(self.metadata_file, 'w') as f:
-                json.dump(metadata, f)
-            
+            fd, tmp_metadata = tempfile.mkstemp(
+                dir=self.vector_store_dir, prefix=".tmp-metadata-", suffix=".json"
+            )
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(metadata, f)
+                os.replace(tmp_metadata, self.metadata_file)
+            finally:
+                if os.path.exists(tmp_metadata):
+                    os.unlink(tmp_metadata)
+
             logger.info("Vectors and metadata saved successfully")
             return True
         except Exception as e:

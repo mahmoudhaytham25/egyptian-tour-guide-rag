@@ -4,15 +4,24 @@ services:
     restart: unless-stopped
     volumes:
       - mongo-data:/data/db
+    # Bound to localhost only — the backend reaches mongo over the compose
+    # network; this mapping just enables local (non-docker) tooling.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   model-server:
     build: ./model-server
     restart: unless-stopped
     environment:
       # Required: provide via a root .env file or the shell environment
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      # Shared secret the backend must send as X-Internal-Token
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
       # 0.0.0.0 so the backend container can reach it (default is 127.0.0.1)
       HOST: 0.0.0.0
       PORT: 5050
@@ -22,8 +31,14 @@ services:
       - rag-data:/app/data
       # Generated index files (*_vectors.npz, *_metadata.json)
       - vector-store:/app/vector_store
-    ports:
-      - "5050:5050"
+    # Not published on the host — only the backend may reach it (auth-gated
+    # via X-Internal-Token).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5050/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   backend:
     build: ./backend
@@ -32,14 +47,21 @@ services:
     # additionally waits until mongo accepts connections, runs
     # `migrate-mongo up` (DB migrations), then starts the server.
     depends_on:
-      - mongo
-      - model-server
+      mongo:
+        condition: service_healthy
+      model-server:
+        condition: service_healthy
     environment:
       PORT: 3001
+      NODE_ENV: production
       MONGODB_URI: mongodb://mongo:27017/egyptian_history_rag
-      # Dev-only fallback — always set a real JWT_SECRET outside local dev
-      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      # No fallback — a missing JWT_SECRET fails compose up front instead of
+      # silently signing tokens with a guessable key.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
       MODEL_SERVER_URL: http://model-server:5050
+      # Comma-separated extra origins, e.g. a deployed frontend URL
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
     volumes:
       # The backend resolves data/ and vector_store/ via ../model-server/
       # relative to its own root (/app), i.e. /model-server/... — the named
@@ -48,6 +70,12 @@ services:
       - vector-store:/model-server/vector_store
     ports:
       - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   frontend:
     build:
@@ -56,8 +84,10 @@ services:
         # Baked into the static bundle at build time — must be the address
         # the *browser* uses to reach the backend (localhost, port-mapped).
         REACT_APP_API_URL: http://localhost:3001/api
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:80"
 

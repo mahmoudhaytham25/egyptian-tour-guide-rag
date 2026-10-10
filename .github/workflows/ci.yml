@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
@@ -12,10 +16,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
         working-directory: backend
-        run: npm install
+        run: npm ci
       - name: Run tests
         working-directory: backend
         run: npx jest
@@ -36,10 +42,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
         working-directory: backend
-        run: npm install
+        run: npm ci
       - name: Verify migrations apply, roll back, and re-apply
         working-directory: backend
         env:
@@ -56,9 +64,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: model-server/requirements-dev.txt
       - name: Install test dependencies
         working-directory: model-server
         run: pip install -r requirements-dev.txt
       - name: Run tests
         working-directory: model-server
         run: python -m pytest
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build
+        working-directory: frontend
+        env:
+          DISABLE_ESLINT_PLUGIN: "true"
+        run: npm run build

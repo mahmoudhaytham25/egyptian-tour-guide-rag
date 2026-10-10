@@ -7,7 +7,8 @@
 # so the final `exec "$@"` runs whatever CMD/command was supplied.
 set -euo pipefail
 
-# Same fallback as config/database.js (compose always sets MONGODB_URI).
+# compose always sets MONGODB_URI; this fallback only covers running the
+# image standalone. The app itself requires MONGODB_URI (fail-fast env check).
 export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/egyptian_history_rag}"
 
 echo "[entrypoint] Waiting for MongoDB at ${MONGODB_URI} ..."

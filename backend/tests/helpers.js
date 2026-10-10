@@ -1,39 +1,27 @@
 /**
  * Shared test helpers.
  *
- * server.js calls connectDB() and app.listen() at require time, so we build a
- * lightweight Express app here that mounts the same routers with the same
- * prefixes — without touching MongoDB or opening a port.
+ * server.js only connects to MongoDB / binds a port inside its
+ * `require.main === module` startup path, and the app itself is built by
+ * createApp() in app.js — so tests exercise the real production middleware
+ * stack (helmet, CORS, routers, 404 + error handlers) in-process.
  */
-const express = require('express');
-const bodyParser = require('body-parser');
-const jwt = require('jsonwebtoken');
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+process.env.MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || 'http://model-server.test';
+process.env.INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || 'test-internal-token';
+// The in-memory limiter would otherwise trip across a whole suite of
+// in-process requests — disable it here; middleware/rateLimit.js has its
+// own unit tests.
+process.env.RATE_LIMIT_DISABLED = 'true';
 
-const apiRoutes = require('../routes/api');
-const authRoutes = require('../routes/auth');
-const chatRoutes = require('../routes/chat');
+const jwt = require('jsonwebtoken');
+const { createApp } = require('../app');
 
 const TEST_JWT_SECRET = 'test-jwt-secret';
 const TEST_USER_ID = 'user-1';
 
 function buildApp() {
-  const app = express();
-  app.use(bodyParser.json());
-  app.use(bodyParser.urlencoded({ extended: true }));
-
-  app.use('/api/auth', authRoutes);
-  app.use('/api/chat', chatRoutes);
-  app.use('/api', apiRoutes);
-
-  // Mirror the 404 + error handlers from server.js
-  app.use((req, res) => {
-    res.status(404).json({ message: 'Route not found' });
-  });
-  app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
-    res.status(500).json({ message: 'Something went wrong!', error: err.message });
-  });
-
-  return app;
+  return createApp();
 }
 
 /** Sign a JWT that the auth middleware will accept. */

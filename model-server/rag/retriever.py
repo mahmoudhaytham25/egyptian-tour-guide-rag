@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import functools
 import numpy as np
 import json
 import pandas as pd
@@ -17,6 +18,17 @@ from rag.utils import get_vector_store_dir, get_times_dir
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("retriever")
+
+
+@functools.lru_cache(maxsize=8)
+def _load_times_csv(times_file):
+    """Read a monument schedule CSV once per path.
+
+    The CSV is static data shipped with the repo, so caching the parsed
+    DataFrame at module level avoids re-reading the file on every request.
+    """
+    return pd.read_csv(times_file)
+
 
 class Retriever:
     def __init__(self, pdf_name, times_name=None, top_k=10):
@@ -55,7 +67,10 @@ class Retriever:
                 return False
             
             logger.info(f"Loading vectors from {self.vector_file}")
-            self.embeddings = np.load(self.vector_file)["embeddings"]
+            # NpzFile loads lazily and holds a file handle — use a context
+            # manager so the arrays are materialized and the handle closed
+            with np.load(self.vector_file) as npz:
+                self.embeddings = npz["embeddings"]
             
             logger.info(f"Loading metadata from {self.metadata_file}")
             with open(self.metadata_file, 'r') as f:
@@ -152,8 +167,9 @@ class Retriever:
                 logger.error(f"Times file not found: {self.times_file}")
                 return []
                 
-            logger.info(f"Loading times data from {self.times_file}")
-            times_data = pd.read_csv(self.times_file)
+            # Module-level cache — the CSV is static data, so it is parsed
+            # once per path instead of re-read on every request
+            times_data = _load_times_csv(self.times_file)
             
             results = []
             for _, row in times_data.iterrows():

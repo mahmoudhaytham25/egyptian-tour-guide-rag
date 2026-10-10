@@ -21,7 +21,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Default: authenticated user exists
   User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
-  Conversation.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([]) });
+  Conversation.find.mockReturnValue({
+    sort: jest.fn().mockReturnValue({ limit: jest.fn().mockResolvedValue([]) })
+  });
 });
 
 describe('auth middleware — /api/chat/* routes', () => {
@@ -74,8 +76,8 @@ describe('auth middleware — /api/chat/* routes', () => {
 });
 
 describe('auth middleware — /api/* routes', () => {
-  test('missing token → 401 on /api/status', async () => {
-    const res = await request(app).get('/api/status');
+  test('missing token → 401 on /api/indexing-status', async () => {
+    const res = await request(app).get('/api/indexing-status');
     expect(res.status).toBe(401);
   });
 

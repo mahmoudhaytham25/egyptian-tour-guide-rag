@@ -11,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.llm import LLMModel
 from rag.retriever import Retriever
+from rag.classifier import IntentClassifier
 from rag.utils import get_data_dir
 
 # Configure logging
@@ -33,50 +34,24 @@ class Generator:
     
     def classify_intent(self, query):
         """
-        Classify the user query as conversational, information-seeking, or schedule-seeking.
-        
+        Classify the user query as conversational, information-seeking, or
+        schedule-seeking.
+
+        Delegates to rag.classifier.IntentClassifier — the tested
+        implementation — rather than duplicating the prompt/parsing logic.
+        The classifier is constructed per call because model_server swaps
+        self.llm with a shared instance after __init__.
+
         Args:
             query (str): User query
-            
+
         Returns:
             str: "conversational", "information-seeking", or "schedule-seeking".
         """
-        classification_prompt = f"""
-        Task: Classify the user query into exactly ONE category.
-        
-        Categories:
-        - "conversational": General chat, greetings, small talk, personal questions, opinions
-        - "information-seeking": Questions about Egyptian history, facts, or specific knowledge that requires document search
-        - "schedule-seeking": Requests for visiting schedules, planning a trip, or itinerary suggestions for Egyptian monuments/locations
-        
-        Examples:
-        - "Hello, how are you?" → "conversational"
-        - "Tell me about Egyptian pyramids" → "information-seeking"
-        - "What's a good schedule for visiting Cairo on Sunday?" → "schedule-seeking"
-        - "Can you help me plan a trip to Alexandria on Tuesday?" → "schedule-seeking"
-        - "When was the Great Pyramid built?" → "information-seeking"
-        
-        User query: "{query}"
-        
-        Classification (respond with exactly one word - conversational, information-seeking, or schedule-seeking):
-        """
-        
-        # Get classification from model
-        response = self.llm.generate(classification_prompt, max_tokens=1024)
-        
-        # Normalize response
-        response = response.lower().strip()
-        
-        # Extract category
-        if "conversational" in response:
-            logger.info(f"Query classified as conversational: {query}")
-            return "conversational"
-        elif "schedule-seeking" in response:
-            logger.info(f"Query classified as schedule-seeking: {query}")
-            return "schedule-seeking"
-        else:
-            logger.info(f"Query classified as information-seeking: {query}")
-            return "information-seeking"
+        result = IntentClassifier(llm=self.llm).classify(query)
+        intent = result["type"]
+        logger.info(f"Query classified as {intent}: {query}")
+        return intent
     
     def get_schedule_parameters(self, query):
         """
@@ -126,19 +101,21 @@ class Generator:
             logger.error(f"Error parsing parameters: {str(e)}")
             return {"error": "invalid_format"}
     
-    def generate_schedule_response(self, query, max_tokens= 1024, extracted_parameters= {"error": "invalid_format"}, chat_history_str=""):
+    def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str=""):
         """
         Generate a schedule response for Egyptian monument visits.
-        
+
         Args:
             query (str): User query
-            
+            extracted_parameters (dict): Parameters from get_schedule_parameters;
+                defaults to an invalid_format error when not provided
+
         Returns:
             dict: Response with schedule information or error
         """
         try:
             # Step 1: Extract parameters from query
-            parameters = extracted_parameters
+            parameters = extracted_parameters if extracted_parameters is not None else {"error": "invalid_format"}
             
             # Step 2: Handle parameter errors
             if "error" in parameters:
@@ -223,7 +200,7 @@ class Generator:
         except Exception as e:
             logger.error(f"Error generating schedule: {str(e)}", exc_info=True)
             return {
-                "answer": f"An error occurred while creating the schedule: {str(e)}",
+                "answer": "I'm having trouble generating a schedule right now — please try again.",
                 "query_type": "schedule-seeking"
             }
 
@@ -281,7 +258,7 @@ class Generator:
         except Exception as e:
             logger.error(f"Error generating conversational response: {str(e)}", exc_info=True)
             return {
-                "answer": f"An error occurred: {str(e)}",
+                "answer": "I'm having trouble generating a response right now — please try again.",
                 "sources": [],
                 "is_conversational": True
             }
@@ -326,56 +303,6 @@ Respond with a comprehensive answer:
         return prompt
 
     
-    def generate_information_response(self, query, top_k=10):
-        """
-        Generate a response to the query using RAG.
-        
-        Args:
-            query (str): User query
-            top_k (int): Number of top results to retrieve
-            
-        Returns:
-            dict: Response with answer and sources
-        """
-        try:
-            # Retrieve relevant chunks
-            results = self.retriever.search(query, top_k=top_k)
-            
-            if not results:
-                return {
-                    "answer": "I couldn't find any relevant information about this in the Egyptian history documents.",
-                    "sources": [],
-                    "is_conversational": False
-                }
-            
-            # Generate prompt
-            prompt = self.generate_prompt(query, results)
-            
-            # Generate response
-            answer = self.llm.generate(prompt)
-            
-            # Format sources
-            sources = []
-            for item in results:
-                chunk = item["chunk"]
-                sources.append({
-                    "page": chunk["page_num"],
-                    "text": chunk["text"][:200] + "..." if len(chunk["text"]) > 200 else chunk["text"]
-                })
-            
-            return {
-                "answer": answer,
-                "sources": sources,
-                "is_conversational": False
-            }
-        except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return {
-                "answer": f"An error occurred: {str(e)}",
-                "sources": [],
-                "is_conversational": False
-            }
-            
     def generate_response(self, query, top_k=10, chat_history=None):
         """
         Generate a response using the RAG pipeline with chat history and query enhancement.
@@ -469,7 +396,7 @@ Respond with a comprehensive answer:
         except Exception as e:
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
             return {
-                "answer": f"An error occurred: {str(e)}",
+                "answer": "I'm having trouble generating a response right now — please try again.",
                 "sources": [],
                 "is_conversational": False
             }
@@ -531,8 +458,14 @@ Respond with a comprehensive answer:
     Rewritten query:
     """
         
-        # Get enhanced query from LLM
-        enhanced_query = llm.generate(enhancement_prompt).strip()
+        # Get enhanced query from LLM. Enhancement is best-effort — on any
+        # failure fall back to the original query rather than failing the
+        # whole request.
+        try:
+            enhanced_query = llm.generate(enhancement_prompt).strip()
+        except Exception as e:
+            logger.warning(f"Query enhancement failed, using original query: {str(e)}")
+            return query
         
         # Don't let enhanced queries get too long
         if len(enhanced_query) > 200:
@@ -589,18 +522,11 @@ Respond with a comprehensive answer:
         """
         if not chat_history:
             return []
-            
-        # Try to use tiktoken for accurate token counting if available
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding("cl100k_base")
-            
-            def count_tokens(text):
-                return len(encoding.encode(text))
-        except ImportError:
-            # Fallback to word count approximation if tiktoken not available
-            def count_tokens(text):
-                return len(text.split())
+
+        # Approximate token counts with word counts — tiktoken is not a
+        # dependency of this service.
+        def count_tokens(text):
+            return len(text.split())
         
         selected_messages = []
         total_tokens = 0
@@ -614,16 +540,10 @@ Respond with a comprehensive answer:
             
             # Handle long single messages by truncating
             if tokens > max_tokens // 2:  # Allow at most half of total tokens for one message
-                if "tiktoken" in locals():
-                    # Accurate truncation with tiktoken
-                    encoded = encoding.encode(content)
-                    truncated_encoded = encoded[:max_tokens // 2]
-                    truncated_content = encoding.decode(truncated_encoded)
-                else:
-                    # Fallback word-based truncation
-                    words = content.split()
-                    truncated_content = ' '.join(words[:max_tokens // 2]) + "... [truncated]"
-                
+                # Word-based truncation
+                words = content.split()
+                truncated_content = ' '.join(words[:max_tokens // 2]) + "... [truncated]"
+
                 msg = msg.copy()  # Create a copy to avoid modifying original
                 msg['content'] = truncated_content
                 tokens = count_tokens(truncated_content)

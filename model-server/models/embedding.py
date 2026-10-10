@@ -30,6 +30,13 @@ MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2.0
 RATE_LIMIT_WAIT_SECONDS = 65.0
 
+# Per-request timeout for each embed_content call. Worst case per batch is
+# MAX_RETRIES * EMBED_TIMEOUT_SECONDS plus the sleeps between attempts
+# (up to ~4 * 65s when persistently rate-limited), which is bounded —
+# persistent failures surface as an indexing failure rather than a hung
+# worker thread.
+EMBED_TIMEOUT_SECONDS = 60
+
 
 class EmbeddingModel:
     def __init__(self, model_name=DEFAULT_MODEL_NAME, model_path=None):
@@ -109,6 +116,7 @@ class EmbeddingModel:
                     content=texts,
                     task_type=task_type,
                     output_dimensionality=OUTPUT_DIMENSIONALITY,
+                    request_options={"timeout": EMBED_TIMEOUT_SECONDS},
                 )
                 return result["embedding"]
             except Exception as e:

@@ -1,195 +1,178 @@
+const mongoose = require('mongoose');
 const Conversation = require('../models/conversation');
 const Message = require('../models/message');
+const { HttpError } = require('../middleware/errors');
+
+const VALID_ROLES = ['user', 'assistant'];
+const MAX_TITLE_LENGTH = 200;
+const MAX_MESSAGE_LENGTH = 4000;
+const CONVERSATIONS_LIMIT = 50;
+const MESSAGES_LIMIT = 200;
+
+function assertValidConversationId(id) {
+  if (!mongoose.isValidObjectId(id)) {
+    throw new HttpError(400, 'Invalid conversation id');
+  }
+}
+
+function validateTitle(title) {
+  if (title !== undefined &&
+      (typeof title !== 'string' || !title.trim() || title.length > MAX_TITLE_LENGTH)) {
+    throw new HttpError(400, `Title must be a non-empty string of at most ${MAX_TITLE_LENGTH} characters`);
+  }
+}
+
+function validateContent(content) {
+  if (typeof content !== 'string' || !content.trim() || content.length > MAX_MESSAGE_LENGTH) {
+    throw new HttpError(400, `Content must be a non-empty string of at most ${MAX_MESSAGE_LENGTH} characters`);
+  }
+}
+
+// Whitelist the metadata field: only a plain object is stored, nothing else
+// from the request body reaches the model (no mass-assignment).
+function sanitizeMetadata(metadata) {
+  if (metadata !== undefined &&
+      (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata))) {
+    throw new HttpError(400, 'Metadata must be an object');
+  }
+  return metadata || {};
+}
+
+async function findOwnedConversation(id, userId) {
+  const conversation = await Conversation.findOne({ _id: id, userId });
+  if (!conversation) {
+    throw new HttpError(404, 'Conversation not found');
+  }
+  return conversation;
+}
 
 // Create a new conversation
 exports.createConversation = async (req, res) => {
-  try {
-    let title = req.body.title || 'New Conversation';
-    
-    const conversation = new Conversation({
-      userId: req.userId,
-      title,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    });
-
-    await conversation.save();
-
-    // If initial message is provided, save it
-    if (req.body.message) {
-      const message = new Message({
-        conversationId: conversation._id,
-        role: 'user',
-        content: req.body.message
-      });
-      
-      await message.save();
-      
-      // Update title with first few words of the message if no title provided
-      if (!req.body.title) {
-        const shortTitle = req.body.message.substring(0, 30) + (req.body.message.length > 30 ? '...' : '');
-        conversation.title = shortTitle;
-        await conversation.save();
-      }
-    }
-
-    res.status(201).json(conversation);
-  } catch (err) {
-    console.error('Error creating conversation:', err);
-    res.status(500).json({ message: 'Error creating conversation', error: err.message });
+  const { title, message } = req.body || {};
+  validateTitle(title);
+  if (message !== undefined) {
+    validateContent(message);
   }
+
+  const conversation = new Conversation({
+    userId: req.userId,
+    title: (title && title.trim()) || 'New Conversation'
+  });
+  await conversation.save();
+
+  // If initial message is provided, save it
+  if (message) {
+    const initialMessage = new Message({
+      conversationId: conversation._id,
+      role: 'user',
+      content: message
+    });
+    await initialMessage.save();
+
+    // Update title with first few words of the message if no title provided
+    if (!title) {
+      conversation.title = message.substring(0, 30) + (message.length > 30 ? '...' : '');
+      await conversation.save();
+    }
+  }
+
+  res.status(201).json(conversation);
 };
 
-// Get all conversations for a user
+// Get all conversations for a user (most recent first, bounded)
 exports.getConversations = async (req, res) => {
-  try {
-    const conversations = await Conversation.find({ 
-      userId: req.userId,
-      isActive: true
-    })
-    .sort({ updatedAt: -1 }); // Most recent first
-    
-    res.status(200).json(conversations);
-  } catch (err) {
-    console.error('Error retrieving conversations:', err);
-    res.status(500).json({ message: 'Error retrieving conversations', error: err.message });
-  }
+  const conversations = await Conversation.find({
+    userId: req.userId,
+    isActive: true
+  })
+    .sort({ updatedAt: -1 })
+    .limit(CONVERSATIONS_LIMIT);
+
+  res.status(200).json(conversations);
 };
 
 // Get a specific conversation with its messages
 exports.getConversation = async (req, res) => {
-  try {
-    const conversation = await Conversation.findOne({
-      _id: req.params.id,
-      userId: req.userId
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
-    }
-    
-    const messages = await Message.find({
-      conversationId: conversation._id
-    }).sort({ timestamp: 1 }); // Oldest first for chat display
-    
-    res.status(200).json({
-      conversation,
-      messages
-    });
-  } catch (err) {
-    console.error('Error retrieving conversation:', err);
-    res.status(500).json({ message: 'Error retrieving conversation', error: err.message });
-  }
+  assertValidConversationId(req.params.id);
+  const conversation = await findOwnedConversation(req.params.id, req.userId);
+
+  // Fetch the most recent messages, then present oldest-first for display.
+  const messages = await Message.find({ conversationId: conversation._id })
+    .sort({ timestamp: -1 })
+    .limit(MESSAGES_LIMIT);
+  messages.reverse();
+
+  res.status(200).json({
+    conversation,
+    messages
+  });
 };
 
 // Add a message to a conversation
 exports.addMessage = async (req, res) => {
-  try {
-    const { role, content } = req.body;
-    
-    if (!role || !content) {
-      return res.status(400).json({ message: 'Role and content are required' });
-    }
-    
-    const conversation = await Conversation.findOne({
-      _id: req.params.id,
-      userId: req.userId
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
-    }
-    
-    // Create the message
-    const message = new Message({
-      conversationId: conversation._id,
-      role,
-      content,
-      metadata: req.body.metadata || {}
-    });
-    
-    await message.save();
-    
-    // Update conversation timestamp
-    conversation.updatedAt = Date.now();
-    await conversation.save();
-    
-    res.status(201).json(message);
-  } catch (err) {
-    console.error('Error adding message:', err);
-    res.status(500).json({ message: 'Error adding message', error: err.message });
+  assertValidConversationId(req.params.id);
+
+  const { role, content } = req.body || {};
+  if (!VALID_ROLES.includes(role)) {
+    throw new HttpError(400, `Role must be one of: ${VALID_ROLES.join(', ')}`);
   }
+  validateContent(content);
+  const metadata = sanitizeMetadata((req.body || {}).metadata);
+
+  const conversation = await findOwnedConversation(req.params.id, req.userId);
+
+  // Create the message
+  const message = new Message({
+    conversationId: conversation._id,
+    role,
+    content,
+    metadata
+  });
+  await message.save();
+
+  // Update conversation timestamp
+  conversation.updatedAt = Date.now();
+  await conversation.save();
+
+  res.status(201).json(message);
 };
 
-// Update conversation details (title, etc.)
+// Update conversation details (title only — no mass-assignment of other fields)
 exports.updateConversation = async (req, res) => {
-  try {
-    const conversation = await Conversation.findOne({
-      _id: req.params.id,
-      userId: req.userId
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
-    }
-    
-    // Update fields
-    if (req.body.title) conversation.title = req.body.title;
-    conversation.updatedAt = Date.now();
-    
-    await conversation.save();
-    
-    res.status(200).json(conversation);
-  } catch (err) {
-    console.error('Error updating conversation:', err);
-    res.status(500).json({ message: 'Error updating conversation', error: err.message });
+  assertValidConversationId(req.params.id);
+  const title = (req.body || {}).title;
+  validateTitle(title);
+
+  const conversation = await findOwnedConversation(req.params.id, req.userId);
+
+  if (title) {
+    conversation.title = title.trim();
   }
+  conversation.updatedAt = Date.now();
+  await conversation.save();
+
+  res.status(200).json(conversation);
 };
 
 // Delete a conversation (soft delete)
 exports.deleteConversation = async (req, res) => {
-  try {
-    const conversation = await Conversation.findOne({
-      _id: req.params.id,
-      userId: req.userId
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
-    }
-    
-    // Soft delete
-    conversation.isActive = false;
-    await conversation.save();
-    
-    res.status(200).json({ message: 'Conversation deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting conversation:', err);
-    res.status(500).json({ message: 'Error deleting conversation', error: err.message });
-  }
+  assertValidConversationId(req.params.id);
+  const conversation = await findOwnedConversation(req.params.id, req.userId);
+
+  conversation.isActive = false;
+  await conversation.save();
+
+  res.status(200).json({ message: 'Conversation deleted successfully' });
 };
 
+// Permanently delete a conversation and its messages
 exports.hardDeleteConversation = async (req, res) => {
-  try {
-    // First check if conversation exists and belongs to user
-    const conversation = await Conversation.findOne({
-      _id: req.params.id,
-      userId: req.userId
-    });
-    
-    if (!conversation) {
-      return res.status(404).json({ message: 'Conversation not found' });
-    }
-    
-    // Delete all associated messages
-    await Message.deleteMany({ conversationId: req.params.id });
-    
-    // Delete the conversation itself
-    await Conversation.deleteOne({ _id: req.params.id });
-    
-    res.status(200).json({ message: 'Conversation permanently deleted' });
-  } catch (err) {
-    console.error('Error deleting conversation:', err);
-    res.status(500).json({ message: 'Error deleting conversation' });
-  }
+  assertValidConversationId(req.params.id);
+  const conversation = await findOwnedConversation(req.params.id, req.userId);
+
+  // Delete all associated messages, then the conversation itself
+  await Message.deleteMany({ conversationId: conversation._id });
+  await Conversation.deleteOne({ _id: conversation._id });
+
+  res.status(200).json({ message: 'Conversation permanently deleted' });
 };

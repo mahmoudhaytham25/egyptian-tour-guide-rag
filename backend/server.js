@@ -1,78 +1,67 @@
-const express = require('express');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-const path = require('path');
-const connectDB = require('./config/database');
 require('dotenv').config(); // This must be at the top to load environment variables
 
-// Import routes
-const apiRoutes = require('./routes/api');
-const authRoutes = require('./routes/auth');
-const chatRoutes = require('./routes/chat');
-
-// Initialize express app
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Connect to MongoDB
-connectDB();
-
-// Middleware
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://localhost:8080',
-    'http://localhost:8081'
-  ],
-  credentials: true
-}));
-
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Create data directory if it doesn't exist
+const path = require('path');
 const fs = require('fs');
-const dataDir = path.join(__dirname, '../model-server/data');
-if (!fs.existsSync(dataDir)) {
+const mongoose = require('mongoose');
+
+const { createApp } = require('./app');
+const connectDB = require('./config/database');
+const { validateEnv } = require('./config/env');
+
+const PORT = Number(process.env.PORT) || 3001;
+
+// Startup path — only runs when this file is executed directly
+// (`node server.js`), so requiring the module from tests is side-effect free.
+async function start() {
+  // Fail fast on missing configuration instead of failing at request time.
+  validateEnv();
+
+  // Connect to MongoDB (exits the process on failure).
+  await connectDB();
+
+  // Create the shared uploads directory if it doesn't exist.
+  const dataDir = path.join(__dirname, '../model-server/data');
   fs.mkdirSync(dataDir, { recursive: true });
+
+  const app = createApp();
+  const server = app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`- Auth routes: http://localhost:${PORT}/api/auth`);
+    console.log(`- Chat routes: http://localhost:${PORT}/api/chat`);
+    console.log(`- RAG routes: http://localhost:${PORT}/api`);
+  });
+
+  // Keep connections from hanging forever; request timeout stays generous
+  // because proxied model-server calls can legitimately take ~2 minutes.
+  server.requestTimeout = 5 * 60 * 1000;
+  server.headersTimeout = 65 * 1000;
+
+  // Node running as PID 1 ignores SIGTERM by default — close gracefully so
+  // `docker stop` doesn't sit through the SIGKILL timeout.
+  const shutdown = (signal) => {
+    console.log(`${signal} received — shutting down`);
+    server.close(() => {
+      mongoose.disconnect()
+        .then(() => process.exit(0))
+        .catch(() => process.exit(0));
+    });
+    // Force-exit if connections don't drain within 10s.
+    setTimeout(() => {
+      console.error('Graceful shutdown timed out — forcing exit');
+      process.exit(1);
+    }, 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  return server;
 }
 
-// Serve static files if needed
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Mount routes
-app.use('/api/auth', authRoutes); // Authentication routes
-app.use('/api/chat', chatRoutes); // Chat history routes (protected by auth middleware)
-app.use('/api', apiRoutes);       // RAG functionality routes
-
-// Basic route for testing
-app.get('/', (req, res) => {
-  res.send('Egyptian History RAG API is running');
-});
-
-// 404 handler
-app.use((req, res, next) => {
-  res.status(404).json({ message: 'Route not found' });
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ 
-    message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'production' ? {} : err.message
+if (require.main === module) {
+  start().catch((err) => {
+    console.error(`Startup failed: ${err.message}`);
+    process.exit(1);
   });
-});
+}
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`- Auth routes: http://localhost:${PORT}/api/auth`);
-  console.log(`- Chat routes: http://localhost:${PORT}/api/chat`);
-  console.log(`- RAG routes: http://localhost:${PORT}/api`);
-});
-
-module.exports = app;
+module.exports = { start, createApp };

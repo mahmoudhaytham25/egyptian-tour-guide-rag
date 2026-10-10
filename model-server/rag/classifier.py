@@ -26,44 +26,60 @@ class IntentClassifier:
     def classify(self, query):
         """
         Classify the user query as conversational, information-seeking, or schedule-seeking.
-        
+
+        This is the single classification implementation used in production —
+        Generator.classify_intent delegates here rather than duplicating the
+        prompt and parsing logic.
+
         Args:
             query (str): User query
-            
+
         Returns:
-            str: "conversational", "information-seeking", or "schedule-seeking"
+            dict: {"type": "conversational"|"information-seeking"|"schedule-seeking",
+                   "confidence": float}
         """
         try:
             # Create classification prompt
             classification_prompt = f"""
-            You are an AI assistant designed to classify user messages into exactly ONE of these categories:
-            1. Conversational: Greetings, small talk, personal questions, opinions, etc.
-            2. Information-Seeking: Questions requiring document search or specific knowledge about Egyptian history
-            3. Schedule-Seeking: Queries requesting a schedule to visit a number of areas in a period of time.
-            
-            User message: "{query}"
-            
-            Respond with just the category name: "conversational", "information-seeking", or "schedule-seeking".
+            Task: Classify the user query into exactly ONE category.
+
+            Categories:
+            - "conversational": General chat, greetings, small talk, personal questions, opinions
+            - "information-seeking": Questions about Egyptian history, facts, or specific knowledge that requires document search
+            - "schedule-seeking": Requests for visiting schedules, planning a trip, or itinerary suggestions for Egyptian monuments/locations
+
+            Examples:
+            - "Hello, how are you?" → "conversational"
+            - "Tell me about Egyptian pyramids" → "information-seeking"
+            - "What's a good schedule for visiting Cairo on Sunday?" → "schedule-seeking"
+            - "Can you help me plan a trip to Alexandria on Tuesday?" → "schedule-seeking"
+            - "When was the Great Pyramid built?" → "information-seeking"
+
+            User query: "{query}"
+
+            Classification (respond with exactly one word - conversational, information-seeking, or schedule-seeking):
             """
-            
-            # Get classification from model
-            response = self.llm.generate(classification_prompt, max_tokens=20)
-            
+
+            # Get classification from model. max_tokens is intentionally
+            # generous — thinking-style models need budget for reasoning
+            # tokens even when the final answer is a single word.
+            response = self.llm.generate(classification_prompt, max_tokens=1024)
+
             # Normalize response
             response = response.lower().strip()
-            
+
             # Extract category
             if "conversational" in response:
                 return {"type": "conversational", "confidence": 0.9}
-            elif "information-seeking" in response:
-                return {"type": "information-seeking", "confidence": 0.9}
             elif "schedule-seeking" in response:
                 return {"type": "schedule-seeking", "confidence": 0.9}
+            elif "information-seeking" in response:
+                return {"type": "information-seeking", "confidence": 0.9}
             else:
                 # Default to information-seeking for ambiguous cases
                 logger.warning(f"Ambiguous classification: {response}. Defaulting to information-seeking.")
                 return {"type": "information-seeking", "confidence": 0.6}
-                    
+
         except Exception as e:
             logger.error(f"Error classifying query: {str(e)}")
             # Default to information-seeking on error

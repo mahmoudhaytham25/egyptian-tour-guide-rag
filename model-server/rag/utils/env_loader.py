@@ -29,28 +29,28 @@ def load_environment():
 
 def get_api_key(key_name, prompt_if_missing=True):
     """
-    Get API key from environment variables
-    If not found and prompt_if_missing is True, prompt user to enter it
-    
+    Get API key from environment variables.
+
     Args:
         key_name (str): Name of the environment variable
-        prompt_if_missing (bool): Whether to prompt user if key is missing
-        
+        prompt_if_missing (bool): If True, raise when the key is missing
+            instead of returning None. (This used to prompt via input(),
+            but an interactive prompt can hang forever under a process
+            supervisor, so it now fails fast with a clear error.)
+
     Returns:
-        str: API key or None if not found
+        str: API key, or None if not found and prompt_if_missing is False
+
+    Raises:
+        RuntimeError: If the key is missing and prompt_if_missing is True
     """
-    # Try to get key from environment
     api_key = os.environ.get(key_name)
-    
-    # If not found and prompt_if_missing is True, prompt user
+
     if not api_key and prompt_if_missing:
-        print(f"\n{key_name} not found in environment variables.")
-        api_key = input(f"Please enter your {key_name}: ").strip()
-        
-        if api_key:
-            # Temporarily set for this session
-            os.environ[key_name] = api_key
-            print(f"\nNote: This key will only be saved for this session.")
-            print(f"To save permanently, add it to your .env file:\n{key_name}=your_key_here\n")
-    
+        raise RuntimeError(
+            f"{key_name} is not set in the environment. "
+            f"Set it in the environment or add it to your .env file:\n"
+            f"{key_name}=your_key_here"
+        )
+
     return api_key
