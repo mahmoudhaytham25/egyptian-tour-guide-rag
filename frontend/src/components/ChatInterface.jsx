@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import api from "../services/api";
+import HistoryDisplay from "./HistoryDisplay";
 import "./ChatInterface.css";
 
 import icon from "../Assets/Images/pharaoh-icon.png";
@@ -88,6 +89,9 @@ const ChatInterface = () => {
   const hasLoadedConversationRef = useRef(false);
   const [backgroundImage, setBackgroundImage] = useState(pyramids);
   const [fade, setFade] = useState(false);
+  // Chat history sidebar state
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
 
   const inputData = [
     { keywords: ["pyramids", "giza", "egypt pyramids"], img: pyramids },
@@ -419,6 +423,8 @@ const ChatInterface = () => {
     setStreaming(false);
     setLoading(false);
     setIsLoadingHistory(false); // Reset loading state
+    setConversations([]); // Clear sidebar list
+    setActiveConversationId(null); // Clear active conversation
     hasLoadedConversationRef.current = false; // Reset conversation loaded flag
     
     // Only reset global flags if explicitly requested (for user switching)
@@ -426,6 +432,160 @@ const ChatInterface = () => {
       setGlobalConversationLoaded(false); // Reset global flag
       setGlobalCurrentUserId(null); // Reset global user ID
       resetLoggingFlags(); // Reset logging flags for new user
+    }
+  };
+
+  // Sidebar helpers ----------------------------------------------------
+
+  // Refresh the sidebar list from GET /chat/conversations
+  const refreshConversations = async () => {
+    try {
+      const list = await api.getConversations();
+      const safeList = Array.isArray(list) ? list : [];
+      setConversations(safeList);
+      return safeList;
+    } catch (error) {
+      console.log("Could not refresh conversation list");
+      return [];
+    }
+  };
+
+  // The conversation the next /query call should persist into:
+  // the selected one, or whatever was previously stored for this user.
+  const getActiveConversationId = () => {
+    return (
+      activeConversationId ||
+      (userId ? localStorage.getItem(`conversationId_${userId}`) : null) ||
+      localStorage.getItem("conversationId")
+    );
+  };
+
+  // Lazily create a backend conversation for a brand-new chat so that
+  // /query has a conversationId to persist messages into.
+  const ensureActiveConversation = async (question) => {
+    if (!conversationFeaturesAvailable) return null;
+
+    const existingId = getActiveConversationId();
+    if (existingId) {
+      if (existingId !== activeConversationId) {
+        setActiveConversationId(existingId);
+      }
+      return existingId;
+    }
+
+    try {
+      const newConversation = await api.createConversation({
+        title: question.slice(0, 40) || "New Conversation",
+      });
+
+      if (newConversation && newConversation._id) {
+        setActiveConversationId(newConversation._id);
+        if (userId) {
+          localStorage.setItem(`conversationId_${userId}`, newConversation._id);
+        }
+        return newConversation._id;
+      }
+    } catch (error) {
+      console.log("Could not create a new conversation, sending without persistence");
+    }
+    return null;
+  };
+
+  // Send a question to the backend, attaching the active conversationId
+  // so the exchange is persisted into that thread.
+  const askWithConversation = async (question) => {
+    const conversationId = await ensureActiveConversation(question);
+
+    const requestData = conversationFeaturesAvailable
+      ? {
+          query: question,
+          conversationId: conversationId,
+          // Include recent conversation history for context
+          conversationHistory: messages.slice(-4).map((msg) => ({
+            role: msg.type === "user" ? "user" : "assistant",
+            content: msg.content,
+          })),
+        }
+      : question.trim();
+
+    const apiResponse = await api.askQuestion(requestData, conversationFeaturesAvailable);
+
+    // Refresh the sidebar so a newly created conversation appears and
+    // the ordering reflects the latest activity.
+    refreshConversations();
+
+    return apiResponse;
+  };
+
+  // Load a conversation's messages when its sidebar item is clicked.
+  const handleSelectConversation = async (conversation) => {
+    if (!conversation || !conversation._id) return;
+    if (conversation._id === activeConversationId) return;
+
+    try {
+      setIsLoadingHistory(true);
+      const data = await api.getConversation(conversation._id);
+
+      const formattedMessages =
+        data && Array.isArray(data.messages)
+          ? data.messages.map((msg) => ({
+              type: msg.role === "user" ? "user" : "bot",
+              content: msg.content,
+              timestamp: msg.timestamp,
+            }))
+          : [];
+
+      setMessages(formattedMessages);
+      setCurrentStreamedText("");
+      setStreaming(false);
+      setLoading(false);
+      setActiveConversationId(conversation._id);
+      if (userId) {
+        localStorage.setItem(`conversationId_${userId}`, conversation._id);
+      }
+      hasLoadedConversationRef.current = true;
+    } catch (error) {
+      console.error("Could not load conversation:", error);
+      setMessages((prev) => [
+        ...prev,
+        { type: "error", content: "Could not load that conversation." },
+      ]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // "New chat": clear the pane; the next send lazily creates a conversation.
+  const handleNewChat = () => {
+    setMessages([]);
+    setCurrentStreamedText("");
+    setStreaming(false);
+    setLoading(false);
+    setActiveConversationId(null);
+    if (userId) {
+      localStorage.removeItem(`conversationId_${userId}`);
+    }
+    localStorage.removeItem("conversationId");
+    inputRef.current?.focus();
+  };
+
+  // Delete a conversation (soft delete on the backend).
+  const handleDeleteConversation = async (conversation) => {
+    if (!conversation || !conversation._id) return;
+    if (!window.confirm("Delete this conversation?")) return;
+
+    try {
+      await api.deleteConversation(conversation._id);
+    } catch (error) {
+      console.error("Could not delete conversation:", error);
+    }
+
+    setConversations((prev) =>
+      prev.filter((c) => c._id !== conversation._id)
+    );
+
+    if (conversation._id === activeConversationId) {
+      handleNewChat();
     }
   };
 
@@ -501,7 +661,10 @@ const ChatInterface = () => {
             console.log("Received conversations:", conversations);
             
             if (!isMounted) return; // Don't update state if component unmounted
-            
+
+            // Populate the sidebar list
+            setConversations(Array.isArray(conversations) ? conversations : []);
+
             if (conversations && Array.isArray(conversations) && conversations.length > 0) {
               // Get the most recent conversation
               const latestConversation = conversations[0];
@@ -510,6 +673,7 @@ const ChatInterface = () => {
               
               // Store the conversation ID for future use (user-specific)
               localStorage.setItem(`conversationId_${userId}`, conversationId);
+              setActiveConversationId(conversationId);
               
               // Load messages from the conversation
               const conversation = await api.getConversation(conversationId);
@@ -540,6 +704,8 @@ const ChatInterface = () => {
               
               if (newConversation && newConversation._id) {
                 localStorage.setItem(`conversationId_${userId}`, newConversation._id);
+                setActiveConversationId(newConversation._id);
+                setConversations([newConversation]);
                 hasLoadedConversationRef.current = true; // Mark as loaded
                 setGlobalConversationLoaded(true); // Set global flag
                 console.log("New conversation created with ID:", newConversation._id);
@@ -969,27 +1135,7 @@ const ChatInterface = () => {
     try {
       console.log("Sending question to API:", input.trim());
 
-      let requestData;
-
-      if (conversationFeaturesAvailable) {
-        // Try to use conversation features
-        const conversationId = localStorage.getItem(`conversationId_${userId}`);
-        
-        requestData = {
-          query: input.trim(),
-          conversationId: conversationId,
-          // Include recent conversation history for context
-          conversationHistory: messages.slice(-4).map(msg => ({
-            role: msg.type === "user" ? "user" : "assistant",
-            content: msg.content
-          }))
-        };
-      } else {
-        // Use simple query format
-        requestData = input.trim();
-      }
-
-      const apiResponse = await api.askQuestion(requestData, conversationFeaturesAvailable);
+      const apiResponse = await askWithConversation(input.trim());
       console.log("Raw API response:", apiResponse);
 
       // Extract only the answer text
@@ -1051,6 +1197,14 @@ const ChatInterface = () => {
   };
 
   return (
+    <div className="chat-layout">
+      <HistoryDisplay
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onSelect={handleSelectConversation}
+        onNewChat={handleNewChat}
+        onDelete={handleDeleteConversation}
+      />
     <div className="chat-container">
       <header className="chat-header">
         <h2>🏺 Egyptian History Assistant</h2>
@@ -1124,23 +1278,7 @@ const ChatInterface = () => {
                           setLoading(true);
                           
                           // Send the suggestion to API
-                          let requestData;
-                          
-                          if (conversationFeaturesAvailable) {
-                            const conversationId = localStorage.getItem(`conversationId_${userId}`);
-                            requestData = {
-                              query: suggestion,
-                              conversationId: conversationId,
-                              conversationHistory: messages.slice(-4).map(msg => ({
-                                role: msg.type === "user" ? "user" : "assistant",
-                                content: msg.content
-                              }))
-                            };
-                          } else {
-                            requestData = suggestion;
-                          }
-                          
-                          api.askQuestion(requestData, conversationFeaturesAvailable)
+                          askWithConversation(suggestion)
                             .then((apiResponse) => {
                               const answerText = extractAnswerText(apiResponse);
                               simulateStreaming(answerText);
@@ -1230,6 +1368,7 @@ const ChatInterface = () => {
           <div className="input-hint">Press Enter to send</div>
         </div>
       </div>
+    </div>
     </div>
   );
 };

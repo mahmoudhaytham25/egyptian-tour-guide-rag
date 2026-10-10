@@ -2,30 +2,27 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../../services/api";          // <- must expose signup / chat helpers
+import "../../../node_modules/bootstrap/dist/css/bootstrap.min.css";
+import "./LoginStyle.css";
 import logo from "../../Assets/Images/FacultyLogo.png";
 
 const Register = () => {
   const navigate = useNavigate();
 
-  /* form state */
-  const [fullName, setFullName]       = useState("");
-  const [email, setEmail]             = useState("");
-  const [password, setPassword]       = useState("");
-  const [dateOfBirth, setDateOfBirth] = useState("");
-  const [gender, setGender]           = useState("");
-  const [contactInfo, setContactInfo] = useState("");
+  /* form state — the backend User model only stores email + password */
+  const [email, setEmail]                 = useState("");
+  const [password, setPassword]           = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
-  /* simple confirm-password check */
-  const confirmPasswordEl = document.getElementById("confirmPassword");
-  const confirmPasswordFun = () => {
-    if (confirmPasswordEl?.value === password) {
-      confirmPasswordEl.classList.remove("is-invalid");
-      confirmPasswordEl.classList.add("is-valid");
-    } else {
-      confirmPasswordEl?.classList.add("is-invalid");
-    }
-  };
+  /* live confirm-password feedback (Bootstrap is-valid/is-invalid classes) */
+  const confirmTouched = confirmPassword.length > 0;
+  const passwordsMatch = confirmPassword === password;
+  const confirmClass = !confirmTouched
+    ? ""
+    : passwordsMatch
+      ? "is-valid"
+      : "is-invalid";
 
   /* main submit */
   const handleSubmit = async (e) => {
@@ -33,27 +30,20 @@ const Register = () => {
     setErrorMessage(""); // Clear previous error messages
 
     // Basic validation
-    if (!fullName || !email || !password || !dateOfBirth || !gender || !contactInfo) {
+    if (!email || !password) {
       setErrorMessage("Please fill in all required fields.");
       return;
     }
 
     // Check if passwords match
-    if (confirmPasswordEl?.value !== password) {
+    if (!passwordsMatch) {
       setErrorMessage("Passwords do not match.");
       return;
     }
 
     try {
-      /* 1. sign the user up  */
-      const { token } = await API.signup({ 
-        fullName, 
-        email, 
-        password, 
-        dateOfBirth, 
-        gender, 
-        contactInfo 
-      });
+      /* 1. sign the user up — backend only reads { email, password } */
+      const { token } = await API.signup({ email, password });
       
       // store token (adapt to your auth flow)
       localStorage.setItem("authToken", token);
@@ -123,15 +113,6 @@ const Register = () => {
             )}
             <input
               className="form-control"
-              type="text"
-              placeholder="Full Name"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              style={{ marginTop: "-8rem" }}
-              required
-            />
-            <input
-              className="form-control"
               type="email"
               placeholder="Email"
               value={email}
@@ -148,39 +129,18 @@ const Register = () => {
             />
             <input
               id="confirmPassword"
-              className="form-control"
+              className={`form-control ${confirmClass}`}
               type="password"
               placeholder="Confirm Password"
-              onChange={confirmPasswordFun}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               required
             />
-            <input
-              className="form-control"
-              type="date"
-              placeholder="Date of Birth"
-              value={dateOfBirth}
-              onChange={(e) => setDateOfBirth(e.target.value)}
-              required
-            />
-            <select
-              className="form-select"
-              value={gender}
-              onChange={(e) => setGender(e.target.value)}
-              required
-            >
-              <option value="">Select Gender</option>
-              <option value="male">Male</option>
-              <option value="female">Female</option>
-              <option value="other">Other</option>
-            </select>
-            <input
-              className="form-control"
-              type="text"
-              placeholder="Contact Info"
-              value={contactInfo}
-              onChange={(e) => setContactInfo(e.target.value)}
-              required
-            />
+            {confirmTouched && !passwordsMatch && (
+              <p className="text-danger" style={{ fontSize: "0.8rem", marginTop: "4px" }}>
+                Passwords do not match.
+              </p>
+            )}
             <button className="btn btn-primary m-2" type="submit">
               Register
             </button>

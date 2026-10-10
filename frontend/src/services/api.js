@@ -172,6 +172,17 @@ const api = {
     }
   },
 
+  // Delete a conversation (backend performs a soft delete)
+  deleteConversation: async (conversationId) => {
+    try {
+      const response = await axiosInstance.delete(`/chat/conversations/${conversationId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error deleting conversation:", error);
+      throw error;
+    }
+  },
+
   // Upload PDF documents (without indexing)
   uploadDocument: async (file) => {
     const formData = new FormData();
