@@ -14,6 +14,7 @@ const DEFAULT_CORS_ORIGINS = [
   'http://localhost:3001',
   'http://localhost:3002',
   'http://localhost:3003',
+  'http://localhost:4173', // vite preview — the local e2e server
   'http://localhost:8080',
   'http://localhost:8081'
 ];

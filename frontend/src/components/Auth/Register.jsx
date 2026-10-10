@@ -2,8 +2,8 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../../services/api";
-import "./LoginStyle.css";
-import logo from "../../Assets/Images/FacultyLogo.png";
+import "./Auth.css";
+import icon from "../../Assets/Images/pharaoh-icon.png";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -17,7 +17,7 @@ const Register = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  /* live confirm-password feedback (Bootstrap is-valid/is-invalid classes) */
+  /* live confirm-password feedback */
   const confirmTouched = confirmPassword.length > 0;
   const passwordsMatch = confirmPassword === password;
   const confirmClass = !confirmTouched
@@ -74,70 +74,62 @@ const Register = () => {
   };
 
   return (
-    <>
-      <div className="container">
-        <div className="w-100">
-          <form
-            onSubmit={handleSubmit}
-            className="container d-flex flex-column justify-content-center align-items-center signupForm"
-            style={{ marginTop: "-8rem" }}
-          >
-            {errorMessage && (
-              <div className="alert alert-danger w-100" role="alert">
-                {errorMessage}
-              </div>
-            )}
-            <input
-              className="form-control"
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <input
-              className="form-control"
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              minLength={MIN_PASSWORD_LENGTH}
-              required
-            />
-            <input
-              id="confirmPassword"
-              className={`form-control ${confirmClass}`}
-              type="password"
-              placeholder="Confirm Password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-            />
-            {confirmTouched && !passwordsMatch && (
-              <p className="text-danger" style={{ fontSize: "0.8rem", marginTop: "4px" }}>
-                Passwords do not match.
-              </p>
-            )}
-            <button
-              className="btn btn-primary m-2"
-              type="submit"
-              disabled={submitting}
-            >
-              {submitting ? "Registering..." : "Register"}
-            </button>
-            <p className="mt-3">
-              Already have an account? <Link to="/">Login here</Link>
-            </p>
-          </form>
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <img src={icon} alt="" className="auth-brand-icon" />
+          <h1 className="auth-brand-title">Egyptian Tour Guide</h1>
+          <p className="auth-brand-sub">
+            Create an account to start exploring ancient Egypt with your AI
+            guide.
+          </p>
         </div>
-        <div
-          className="d-flex justify-content-center align-items-center"
-          id="imgDiv"
-        >
-          <img src={logo} alt="" style={{ width: "150%" }} />
-        </div>
+
+        <form onSubmit={handleSubmit} className="auth-form signupForm">
+          <h2>Create your account</h2>
+          {errorMessage && (
+            <div className="auth-error" role="alert">
+              {errorMessage}
+            </div>
+          )}
+          <input
+            className="auth-input"
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <input
+            className="auth-input"
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={MIN_PASSWORD_LENGTH}
+            required
+          />
+          <input
+            id="confirmPassword"
+            className={`auth-input ${confirmClass}`}
+            type="password"
+            placeholder="Confirm Password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+          />
+          {confirmTouched && !passwordsMatch && (
+            <p className="auth-field-error">Passwords do not match.</p>
+          )}
+          <button type="submit" className="auth-submit" disabled={submitting}>
+            {submitting ? "Registering..." : "Register"}
+          </button>
+          <p className="auth-switch">
+            Already have an account? <Link to="/">Login here</Link>
+          </p>
+        </form>
       </div>
-    </>
+    </div>
   );
 };
 

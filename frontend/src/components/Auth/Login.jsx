@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import API from "../../services/api";
-import "./LoginStyle.css";
-import logo from "../../Assets/Images/FacultyLogo.png";
+import "./Auth.css";
+import icon from "../../Assets/Images/pharaoh-icon.png";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -30,58 +30,49 @@ const Login = () => {
   };
 
   return (
-    <>
-      <div className="container h-100">
-        <div className="w-100">
-          <form
-            onSubmit={handleSubmit}
-            className="container d-flex flex-column justify-content-center align-items-center LoginForm"
-          >
-            <h1>Sign in</h1>
-            <input
-              className="form-control"
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <input
-              className="form-control"
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-            <div className="loginBtn">
-              <button
-                type="submit"
-                className="btn btn-primary m-2"
-                disabled={submitting}
-              >
-                {submitting ? "Signing in..." : "Login"}
-              </button>
-              {error && (
-                <div className="alert alert-danger" role="alert">
-                  {error}
-                </div>
-              )}
-              <p id="registerLink">
-                Don't have an account?
-                <Link to="/register"> Register here</Link>
-              </p>
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <img src={icon} alt="" className="auth-brand-icon" />
+          <h1 className="auth-brand-title">Egyptian Tour Guide</h1>
+          <p className="auth-brand-sub">
+            Ask questions about ancient Egypt and get answers grounded in real
+            sources.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="auth-form">
+          <h2>Sign in</h2>
+          <input
+            className="auth-input"
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <input
+            className="auth-input"
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+          <button type="submit" className="auth-submit" disabled={submitting}>
+            {submitting ? "Signing in..." : "Login"}
+          </button>
+          {error && (
+            <div className="auth-error" role="alert">
+              {error}
             </div>
-          </form>
-        </div>
-        <div
-          className="d-flex justify-content-center align-items-center"
-          id="imgDiv"
-        >
-          <img src={logo} alt="" className="loginImg" style={{ width: "150%" }} />
-        </div>
+          )}
+          <p className="auth-switch">
+            Don't have an account? <Link to="/register">Register here</Link>
+          </p>
+        </form>
       </div>
-    </>
+    </div>
   );
 };
 

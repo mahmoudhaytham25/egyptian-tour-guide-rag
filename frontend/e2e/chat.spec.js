@@ -99,13 +99,17 @@ test("a new chat is persisted and appears in the sidebar", async ({
   ).toBeVisible();
 });
 
-test("the Knowledge Base section lists documents and logout works", async ({
+test("the Knowledge Base page lists documents and logout works", async ({
   page,
   request,
 }) => {
   const email = uniqueEmail();
   await signupViaApi(request, email);
   await loginViaForm(page, email);
+
+  // Knowledge Base lives on its own route — reached from the chat header.
+  await page.getByRole("link", { name: "Knowledge Base" }).click();
+  await expect(page).toHaveURL(/\/documents$/);
 
   await expect(
     page.getByRole("heading", { name: "Knowledge Base" })

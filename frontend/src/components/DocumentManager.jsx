@@ -116,35 +116,39 @@ const DocumentManager = () => {
   };
 
   if (loading && documents.length === 0) {
-    return <div>Loading documents...</div>;
+    return <div className="document-manager"><p className="dm-hint">Loading documents...</p></div>;
   }
 
   return (
     <div className="document-manager">
-      <h2>Document Management</h2>
-      
-      {message && <p className="message">{message}</p>}
-      {statusMessage && <p className="status-message">{statusMessage}</p>}
-      
+      <h3>Document Management</h3>
+
+      {message && <p className="dm-message">{message}</p>}
+      {statusMessage && <p className="dm-status">{statusMessage}</p>}
+
       <div className="document-sections">
         <div className="document-section">
-          <h3>Uploaded Documents (Not Indexed)</h3>
+          <h4>Uploaded Documents (Not Indexed)</h4>
           {documents.filter(doc => !doc.indexed).length === 0 ? (
-            <p>No unindexed documents available.</p>
+            <p className="dm-hint">No unindexed documents available.</p>
           ) : (
             <ul className="documents-list">
               {documents
                 .filter(doc => !doc.indexed)
                 .map((doc, index) => (
                   <li key={index} className="document-item">
-                    <span className="document-name">{doc.originalName || doc.filename}</span>
-                    <button 
+                    <span className="document-name">
+                      <span className="doc-icon" aria-hidden="true">📄</span>
+                      {doc.originalName || doc.filename}
+                    </span>
+                    <button
+                      type="button"
                       onClick={() => handleIndexDocument(doc.filename)}
                       disabled={pollingActive || indexingStatus[doc.filename] === 'indexing'}
-                      className="index-button"
+                      className="kb-button index-button"
                     >
-                      {indexingStatus[doc.filename] === 'indexing' || pollingActive 
-                        ? 'Indexing...' 
+                      {indexingStatus[doc.filename] === 'indexing' || pollingActive
+                        ? 'Indexing...'
                         : 'Index Document'}
                     </button>
                   </li>
@@ -152,18 +156,21 @@ const DocumentManager = () => {
             </ul>
           )}
         </div>
-        
+
         <div className="document-section">
-          <h3>Indexed Documents</h3>
+          <h4>Indexed Documents</h4>
           {documents.filter(doc => doc.indexed).length === 0 ? (
-            <p>No indexed documents available.</p>
+            <p className="dm-hint">No indexed documents available.</p>
           ) : (
             <ul className="documents-list">
               {documents
                 .filter(doc => doc.indexed)
                 .map((doc, index) => (
                   <li key={index} className="document-item indexed">
-                    <span className="document-name">{doc.originalName || doc.filename}</span>
+                    <span className="document-name">
+                      <span className="doc-icon" aria-hidden="true">📄</span>
+                      {doc.originalName || doc.filename}
+                    </span>
                     <span className="indexed-badge">Indexed</span>
                   </li>
                 ))}

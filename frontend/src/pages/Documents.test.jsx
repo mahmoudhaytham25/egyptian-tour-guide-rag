@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import Home from "./Home";
+import Documents from "./Documents";
 
-// Children are stubbed so this test only covers Home's composition and the
-// refresh-on-upload wiring (DocumentManager remounts via key change).
+// Children are stubbed so this test only covers the page's composition and
+// the refresh-on-upload wiring (DocumentManager remounts via key change).
 const { managerMounts, managerUnmounts } = vi.hoisted(() => ({
   managerMounts: vi.fn(),
   managerUnmounts: vi.fn(),
@@ -29,27 +29,26 @@ vi.mock("../components/DocumentManager", async () => {
   };
 });
 
-vi.mock("./Chat", () => ({
-  default: () => <div data-testid="chat-page" />,
-}));
-
-describe("Home page", () => {
+describe("Documents page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders the chat plus the Knowledge Base section", () => {
-    render(<Home />);
-    expect(screen.getByTestId("chat-page")).toBeInTheDocument();
+  it("renders the Knowledge Base section with navigation", () => {
+    render(<Documents />);
     expect(
       screen.getByRole("heading", { name: "Knowledge Base" })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /back to chat/i })
+    ).toHaveAttribute("href", "/chat");
+    expect(screen.getByRole("button", { name: "Logout" })).toBeInTheDocument();
     expect(screen.getByTestId("uploader")).toBeInTheDocument();
     expect(screen.getByTestId("doc-manager")).toBeInTheDocument();
   });
 
   it("remounts DocumentManager when the uploader signals a new document", () => {
-    render(<Home />);
+    render(<Documents />);
     expect(managerMounts).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("uploader"));

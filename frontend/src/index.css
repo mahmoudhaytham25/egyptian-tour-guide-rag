@@ -1,13 +1,33 @@
+/* Self-hosted variable font (OFL) — covers all Cinzel weights, latin subset.
+   Self-hosting keeps the CSP (font-src 'self') intact and works offline. */
+@font-face {
+  font-family: "Cinzel";
+  src: url("/fonts/cinzel-latin.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-display: "Cinzel", Georgia, "Times New Roman", serif;
+  --gold: #d4af37;
+  --gold-deep: #b8901f;
+  --ink: #242842;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+  padding: 0;
+  background-color: #181c2e;
+  color: #2b2e42;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
     monospace;
 }

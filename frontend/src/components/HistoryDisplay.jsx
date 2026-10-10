@@ -1,5 +1,5 @@
 import React from "react";
-import "./ChatInterface.css";
+import "./chat/chat.css";
 
 // Format the conversation timestamp for the sidebar label:
 // "HH:MM" if it was updated today, otherwise "Mon D, YYYY".
@@ -49,6 +49,7 @@ const HistoryDisplay = ({
   return (
     <aside className="chat-sidebar">
       <div className="chat-sidebar-header">
+        <p className="sidebar-caption">Conversations</p>
         <button type="button" className="new-chat-button" onClick={onNewChat}>
           + New chat
         </button>
