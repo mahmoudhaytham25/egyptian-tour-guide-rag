@@ -12,6 +12,7 @@ COPY . .
 ARG REACT_APP_API_URL=http://localhost:3001/api
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
 
+ENV DISABLE_ESLINT_PLUGIN=true
 RUN npm run build
 
 # ---- Serve stage ----
