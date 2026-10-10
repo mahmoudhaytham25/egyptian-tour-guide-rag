@@ -1,25 +1,22 @@
 /**
  * Tests for routes/api.js + controllers/ragController.js.
  *
- * Mocked: mongoose models (User/Conversation/Message), axios (calls to the
- * Flask model server), child_process.spawn (the Python indexer), and
- * fs.existsSync is spied on per-test to simulate uploaded PDFs.
+ * Mocked: mongoose models (User/Conversation/Message) and axios (all calls
+ * to the Flask model server — /query and /index). fs.existsSync is spied on
+ * per-test to simulate uploaded PDFs in the shared data directory.
  */
 process.env.JWT_SECRET = 'test-jwt-secret';
 
 const fs = require('fs');
 const path = require('path');
-const { EventEmitter } = require('events');
 const request = require('supertest');
 
 jest.mock('../models/user', () => require('./mockFactories').makeUserModel());
 jest.mock('../models/conversation', () => require('./mockFactories').makeConversationModel());
 jest.mock('../models/message', () => require('./mockFactories').makeMessageModel());
 jest.mock('axios');
-jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
 const axios = require('axios');
-const { spawn } = require('child_process');
 const User = require('../models/user');
 const Conversation = require('../models/conversation');
 const { buildApp, authHeader } = require('./helpers');
@@ -27,31 +24,19 @@ const { buildApp, authHeader } = require('./helpers');
 const app = buildApp();
 const AUTH = authHeader();
 
-/** A fake ChildProcess: EventEmitter with stdout/stderr emitters. */
-function fakeProcess() {
-  const p = new EventEmitter();
-  p.stdout = new EventEmitter();
-  p.stderr = new EventEmitter();
-  p.kill = jest.fn();
-  return p;
-}
-
-let spawnedProcs;
+/** Let queued promise callbacks (indexing status updates) run. */
+const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // clearAllMocks does not remove mock implementations — reset them so a
+  // configured axios.post from one test can't leak into the next.
+  axios.post.mockReset();
   User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
-  spawnedProcs = [];
-  spawn.mockImplementation(() => {
-    const p = fakeProcess();
-    spawnedProcs.push(p);
-    return p;
-  });
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
-  delete process.env.PYTHON_BIN;
 });
 
 /**
@@ -64,14 +49,10 @@ function mockDataFiles(...names) {
   );
 }
 
-/** Emit a clean exit so module-level indexingStatus is reset. */
-function finishIndexing(proc, code = 0) {
-  proc.emit('close', code);
-}
-
 describe('POST /api/index — filename validation', () => {
-  test("filename 'test.pdf' is accepted → 202 and indexer spawned", async () => {
+  test("filename 'test.pdf' is accepted → 202 and model server /index called", async () => {
     mockDataFiles('test.pdf');
+    axios.post.mockResolvedValue({ data: { success: true, message: 'done' } });
 
     const res = await request(app)
       .post('/api/index')
@@ -79,23 +60,24 @@ describe('POST /api/index — filename validation', () => {
       .send({ filename: 'test.pdf' });
 
     expect(res.status).toBe(202);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [cmd, args] = spawn.mock.calls[0];
-    expect(cmd).toBe('python3'); // default interpreter
-    expect(args[0]).toMatch(/rag[\\/]indexer\.py$/);
-    expect(args[1].endsWith(path.join('data', 'test.pdf'))).toBe(true);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/index$/),
+      { filename: 'test.pdf' },
+      expect.objectContaining({ timeout: 0 })
+    );
 
-    finishIndexing(spawnedProcs[0], 0);
+    await flushPromises(); // let the status update settle
   });
 
-  test("path traversal '../etc/passwd' → 400, indexer not spawned", async () => {
+  test("path traversal '../etc/passwd' → 400, model server not called", async () => {
     const res = await request(app)
       .post('/api/index')
       .set('Authorization', AUTH)
       .send({ filename: '../etc/passwd' });
 
     expect(res.status).toBe(400);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   test("nested path 'a/b.pdf' → 400 (path.basename sanitization)", async () => {
@@ -105,7 +87,7 @@ describe('POST /api/index — filename validation', () => {
       .send({ filename: 'a/b.pdf' });
 
     expect(res.status).toBe(400);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   test("non-PDF filename 'notes.txt' → 400", async () => {
@@ -115,7 +97,7 @@ describe('POST /api/index — filename validation', () => {
       .send({ filename: 'notes.txt' });
 
     expect(res.status).toBe(400);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   test('missing filename → 400', async () => {
@@ -125,7 +107,7 @@ describe('POST /api/index — filename validation', () => {
       .send({});
 
     expect(res.status).toBe(400);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   test('PDF not in data dir → 404', async () => {
@@ -137,28 +119,17 @@ describe('POST /api/index — filename validation', () => {
       .send({ filename: 'ghost.pdf' });
 
     expect(res.status).toBe(404);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(axios.post).not.toHaveBeenCalled();
   });
 });
 
-describe('POST /api/index — indexer process handling', () => {
-  test('uses PYTHON_BIN env var when set', async () => {
-    process.env.PYTHON_BIN = 'custom-python';
-    mockDataFiles('test.pdf');
-
-    const res = await request(app)
-      .post('/api/index')
-      .set('Authorization', AUTH)
-      .send({ filename: 'test.pdf' });
-
-    expect(res.status).toBe(202);
-    expect(spawn.mock.calls[0][0]).toBe('custom-python');
-
-    finishIndexing(spawnedProcs[0], 0);
-  });
-
+describe('POST /api/index — model server handling', () => {
   test('409 while indexing is already in progress', async () => {
     mockDataFiles('test.pdf');
+
+    // Model server /index that never resolves → isIndexing stays true
+    let resolveIndex;
+    axios.post.mockImplementation(() => new Promise((r) => { resolveIndex = r; }));
 
     await request(app)
       .post('/api/index')
@@ -172,24 +143,23 @@ describe('POST /api/index — indexer process handling', () => {
 
     expect(res.status).toBe(409);
 
-    finishIndexing(spawnedProcs[0], 0);
+    // Finish indexing so module-level status resets for later tests
+    resolveIndex({ data: { success: true } });
+    await flushPromises();
   });
 
-  test("spawn ENOENT falls back to 'python'; failure there resets indexing status", async () => {
+  test('successful indexing resets status (progress 100, isIndexing false)', async () => {
     mockDataFiles('test.pdf');
+    axios.post.mockResolvedValue({ data: { success: true, message: 'Indexing done' } });
 
-    await request(app)
+    const res = await request(app)
       .post('/api/index')
       .set('Authorization', AUTH)
       .send({ filename: 'test.pdf' });
 
-    // python3 is missing → controller should fall back to 'python'
-    spawnedProcs[0].emit('error', Object.assign(new Error('spawn python3 ENOENT'), { code: 'ENOENT' }));
-    expect(spawn).toHaveBeenCalledTimes(2);
-    expect(spawn.mock.calls[1][0]).toBe('python');
+    expect(res.status).toBe(202);
 
-    // 'python' also missing → indexing status must be reset with an error
-    spawnedProcs[1].emit('error', Object.assign(new Error('spawn python ENOENT'), { code: 'ENOENT' }));
+    await flushPromises();
 
     const status = await request(app)
       .get('/api/indexing-status')
@@ -197,7 +167,51 @@ describe('POST /api/index — indexer process handling', () => {
 
     expect(status.status).toBe(200);
     expect(status.body.status.isIndexing).toBe(false);
-    expect(status.body.status.error).toMatch(/python/);
+    expect(status.body.status.progress).toBe(100);
+    expect(status.body.status.error).toBeNull();
+  });
+
+  test('model server failure resets indexing status with an error', async () => {
+    mockDataFiles('test.pdf');
+    axios.post.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    await request(app)
+      .post('/api/index')
+      .set('Authorization', AUTH)
+      .send({ filename: 'test.pdf' });
+
+    await flushPromises();
+
+    const status = await request(app)
+      .get('/api/indexing-status')
+      .set('Authorization', AUTH);
+
+    expect(status.status).toBe(200);
+    expect(status.body.status.isIndexing).toBe(false);
+    expect(status.body.status.error).toMatch(/model server/i);
+  });
+
+  test('model server error response surfaces its message in status', async () => {
+    mockDataFiles('test.pdf');
+    axios.post.mockRejectedValue({
+      message: 'Request failed with status code 500',
+      response: { status: 500, data: { success: false, message: 'Indexing failed for test.pdf' } }
+    });
+
+    await request(app)
+      .post('/api/index')
+      .set('Authorization', AUTH)
+      .send({ filename: 'test.pdf' });
+
+    await flushPromises();
+
+    const status = await request(app)
+      .get('/api/indexing-status')
+      .set('Authorization', AUTH);
+
+    expect(status.status).toBe(200);
+    expect(status.body.status.isIndexing).toBe(false);
+    expect(status.body.status.error).toMatch(/Indexing failed for test\.pdf/);
   });
 });
 

@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const API_URL = "http://localhost:3001/api"; // Adjust if needed
+// CRA inlines REACT_APP_* env vars at build time; fall back to the local default.
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001/api";
 
 // Create axios instance with default config
 const axiosInstance = axios.create({

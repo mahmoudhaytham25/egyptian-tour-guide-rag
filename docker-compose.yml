@@ -1,0 +1,64 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+
+  model-server:
+    build: ./model-server
+    restart: unless-stopped
+    environment:
+      # Required: provide via a root .env file or the shell environment
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # 0.0.0.0 so the backend container can reach it (default is 127.0.0.1)
+      HOST: 0.0.0.0
+      PORT: 5050
+    volumes:
+      # Uploaded PDFs — shared with the backend (uploads land here).
+      # Seeded with the image's bundled data/egyptian_history.pdf on first run.
+      - rag-data:/app/data
+      # Generated index files (*_vectors.npz, *_metadata.json)
+      - vector-store:/app/vector_store
+    ports:
+      - "5050:5050"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - model-server
+    environment:
+      PORT: 3001
+      MONGODB_URI: mongodb://mongo:27017/egyptian_history_rag
+      # Dev-only fallback — always set a real JWT_SECRET outside local dev
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      MODEL_SERVER_URL: http://model-server:5050
+    volumes:
+      # The backend resolves data/ and vector_store/ via ../model-server/
+      # relative to its own root (/app), i.e. /model-server/... — the named
+      # volumes keep them in sync with the model-server container.
+      - rag-data:/model-server/data
+      - vector-store:/model-server/vector_store
+    ports:
+      - "3001:3001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the static bundle at build time — must be the address
+        # the *browser* uses to reach the backend (localhost, port-mapped).
+        REACT_APP_API_URL: http://localhost:3001/api
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  mongo-data:
+  rag-data:
+  vector-store:

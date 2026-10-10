@@ -23,8 +23,8 @@ A full-stack agentic chatbot for Egyptian tourism. It answers questions grounded
 ```
 frontend/          React SPA (port 3000) — chat UI, document management, auth
      │
-backend/           Express API (port 5000) — JWT auth, conversations, RAG endpoints
-     │                              └─ spawns the indexer for document ingestion
+backend/           Express API (port 3001) — JWT auth, conversations, RAG endpoints
+     │                              └─ calls model-server /query + /index over HTTP
 model-server/      Flask model services (port 5050) + RAG pipeline
                    ├─ rag/          classifier, indexer, retriever, generator
                    ├─ models/       Gemini 2.0 Flash LLM + sentence-transformer embeddings
@@ -40,11 +40,29 @@ Python (Flask, Sentence Transformers, PyMuPDF) · Node.js (Express) · React · 
 
 ## Getting Started
 
+### Run with Docker (recommended)
+
+The whole stack — frontend, backend, model server, and MongoDB — runs with one command:
+
+```
+cp .env.example .env   # then set GEMINI_API_KEY inside .env
+docker compose up --build
+```
+
+Then open http://localhost:3000.
+
+- **`GEMINI_API_KEY`** is required by the model server — get one at [Google AI Studio](https://aistudio.google.com/app/apikey).
+- **`JWT_SECRET`** is optional; compose falls back to a dev-only value. Set a long random string for real deployments.
+- First start is slow: the model-server image installs torch/sentence-transformers, and the embedding model downloads on first run. Queries will return 502 until `/health` reports the models loaded.
+- Named volumes keep MongoDB data, uploaded PDFs (`rag-data`, seeded with `data/egyptian_history.pdf`), and the generated vector index (`vector-store`) persistent across restarts. Upload a PDF + index it once (Documents UI) or re-index the bundled PDF after a fresh `up`.
+
+### Run locally (without Docker)
+
 1. **Model server** — `cd model-server && pip install -r requirements.txt && python model_server.py` (port 5050)
-2. **API** — `cd backend && npm install && npm start` (port 5000)
+2. **API** — `cd backend && npm install && npm start` (port 3001)
 3. **Frontend** — `cd frontend && npm install && npm start` (port 3000)
 
-Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide.
+Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
 
 **Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 

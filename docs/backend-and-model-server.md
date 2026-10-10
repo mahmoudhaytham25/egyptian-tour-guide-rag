@@ -138,6 +138,46 @@ The diagram shows:
       show dbs
       ```
 
+## Running with Docker
+
+The full stack (frontend, backend, model server, MongoDB) is defined in `docker-compose.yml` at the repo root:
+
+1. **Create the root `.env` file** (compose reads it automatically):
+
+    ```
+    cp .env.example .env
+    # edit .env — set GEMINI_API_KEY (required)
+    ```
+
+    | Variable | Required | Notes |
+    |----------|----------|-------|
+    | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 2.0 Flash |
+    | `JWT_SECRET` | No | Backend JWT signing secret; falls back to `dev-only-secret-change-me` — always set a real value outside local dev |
+
+2. **Build and start everything**:
+
+    ```
+    docker compose up --build
+    ```
+
+3. Open the frontend at `http://localhost:3000`. The backend API is at `http://localhost:3001`, the model server at `http://localhost:5050` (internal hostname `model-server`), and MongoDB at `mongodb://localhost:27017`.
+
+### How indexing works under Docker
+
+The backend **does not** run Python — it calls `POST http://model-server:5050/index` over HTTP, and the model server runs the indexer in-process. Uploads and the generated vector store are shared between the two containers via named volumes:
+
+- `rag-data` — mounted at `/app/data` (model-server) and `/model-server/data` (backend, where its `../model-server/data` paths resolve). Seeded with the bundled `data/egyptian_history.pdf` on first run.
+- `vector-store` — mounted at `/app/vector_store` (model-server) and `/model-server/vector_store` (backend). Holds generated `*_vectors.npz` / `*_metadata.json` files.
+- `mongo-data` — MongoDB data files.
+
+The same volume mounts keep `data/` and `vector_store/` consistent when running locally without Docker (both services then read the same repo directories).
+
+### Docker caveats
+
+- First `up` is slow: the model-server image installs torch/transformers (~GBs) and the embedding model downloads on first container start. `/query` calls will fail until model initialization finishes — check `docker compose logs -f model-server`.
+- The model server binds `0.0.0.0` only inside Docker (via the `HOST` env var); locally it still defaults to `127.0.0.1`.
+- If `GEMINI_API_KEY` is missing the server starts but LLM features return errors — it no longer prompts for a key when running non-interactively.
+
 ## Running the System
 
 ### Start the Flask Model Services (Port 5050)
@@ -147,11 +187,9 @@ The diagram shows:
 cd model-server
 python model_server.py
 ```
-This will start:
-- Gemini 2.0 LLM service at `http://localhost:5050/llm`
-- Embedding service at `http://localhost:5050/embed`
+This loads the models and starts the Flask API at `http://localhost:5050` (`/health`, `/query`, `/index`).
 
-### Start the Node.js Server (Port 5000)
+### Start the Node.js Server (Port 3001)
 
 2. **Second Terminal**:
 ```
@@ -159,7 +197,7 @@ cd backend
 npm start
 ```
 
-The main API will be available at `http://localhost:5000`
+The main API will be available at `http://localhost:3001`
 
 ## API Endpoints
 
@@ -196,8 +234,11 @@ All endpoints below except `/api/health` require `Authorization: Bearer <token>`
 
 | Endpoint | Method | Description | Request Body |
 |----------|--------|-------------|-------------|
-| `/llm` | POST | Generate responses | `{"prompt": "your prompt"}` |
-| `/embed` | POST | Create embeddings | `{"text": "your text"}` |
+| `/health` | GET | Model load status | N/A |
+| `/query` | POST | Run a query through the RAG pipeline | `{"query": "your question", "top_k": 5, "chat_history": []}` |
+| `/index` | POST | Index a PDF from `data/` (runs `PDFIndexer` in-process) | `{"filename": "egyptian_history.pdf"}` |
+
+The backend calls `/index` over HTTP — indexing no longer spawns a Python child process, which is what allows the backend and model server to run in separate containers.
 
 ## Authentication Details
 
@@ -219,52 +260,52 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 1. **Register a new user**:
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:5000/api/auth/signup
+curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:3001/api/auth/signup
 ```
 
 2. **Verify email** (link sent to user's email):
 ```
 # User clicks verification link or you can test with:
-curl -X GET http://localhost:5000/api/auth/verify/{verification_token}
+curl -X GET http://localhost:3001/api/auth/verify/{verification_token}
 ```
 
 3. **Login to get JWT token**:
 ```
-curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:5000/api/auth/login
+curl -X POST -H "Content-Type: application/json" -d '{"email": "user@example.com", "password": "SecurePassword123"}' http://localhost:3001/api/auth/login
 ```
 
 ### RAG System Usage
 
 1. **Upload your Egyptian history PDF**:
 ```
-curl -X POST -H "Authorization: Bearer YOUR_TOKEN" -F "pdf=@path/to/document.pdf" http://localhost:5000/api/upload
+curl -X POST -H "Authorization: Bearer YOUR_TOKEN" -F "pdf=@path/to/document.pdf" http://localhost:3001/api/upload
 ```
 
 2. **Index the document**:
 ```
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"filename": "egyptian_history.pdf"}' http://localhost:5000/api/index
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"filename": "egyptian_history.pdf"}' http://localhost:3001/api/index
 ```
 
 3. **Query the system**:
 ```
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"query":"Who built the Great Pyramid of Giza?"}' http://localhost:5000/api/query
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"query":"Who built the Great Pyramid of Giza?"}' http://localhost:3001/api/query
 ```
 
 ### Chat System Usage
 
 1. **Create a new conversation**:
 ```
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"title": "Egyptian Pyramids", "message": "Tell me about the Great Pyramid of Giza"}' http://localhost:5000/api/chat/conversations
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"title": "Egyptian Pyramids", "message": "Tell me about the Great Pyramid of Giza"}' http://localhost:3001/api/chat/conversations
 ```
 
 2. **Get all conversations**:
 ```
-curl -X GET -H "Authorization: Bearer YOUR_TOKEN" http://localhost:5000/api/chat/conversations
+curl -X GET -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3001/api/chat/conversations
 ```
 
 3. **Add message to conversation**:
 ```
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"role": "user", "content": "Tell me more about hieroglyphics"}' http://localhost:5000/api/chat/conversations/{conversation_id}/messages
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_TOKEN" -d '{"role": "user", "content": "Tell me more about hieroglyphics"}' http://localhost:3001/api/chat/conversations/{conversation_id}/messages
 ```
 
 ### Example Interactions

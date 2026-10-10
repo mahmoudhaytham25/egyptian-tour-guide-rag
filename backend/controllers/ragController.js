@@ -1,7 +1,6 @@
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const axios = require('axios'); // New import for HTTP requests
+const axios = require('axios');
 
 const Message = require('../models/message');
 const Conversation = require('../models/conversation');
@@ -107,107 +106,32 @@ exports.indexDocument = (req, res) => {
       currentFile: filename
     };
 
-    console.log(`Starting indexing process for ${filename}`);
+    console.log(`Starting indexing for ${filename} via model server`);
 
-    // Run the Python indexer script
-    const indexerScript = path.join(__dirname, '../../model-server/rag/indexer.py');
-    const pythonBin = process.env.PYTHON_BIN || 'python3';
-
-    const spawnIndexer = (command) => {
-      const pythonProcess = spawn(command, [indexerScript, pdfPath]);
-      let spawnFailed = false;
-
-      pythonProcess.on('error', (err) => {
-        spawnFailed = true;
-
-        // 'python3' missing (e.g. some Windows installs) — fall back to 'python'
-        if (err.code === 'ENOENT' && command !== 'python') {
-          console.warn(`'${command}' not found, falling back to 'python'`);
-          spawnIndexer('python');
-          return;
-        }
-
-        console.error('Failed to start indexing process:', err);
-        indexingStatus.isIndexing = false;
-        indexingStatus.error = `Failed to start Python process (${command}): ${err.message}`;
-      });
-
-      attachIndexerHandlers(pythonProcess, () => spawnFailed);
-    };
-
-    const attachIndexerHandlers = (pythonProcess, hasSpawnFailed) => {
-
-    pythonProcess.stdout.on('data', (data) => {
-      const output = data.toString().trim();
-      console.log('Indexer output:', output);
-      
-      // Try to parse progress updates
-      try {
-        if (output.includes('progress:')) {
-          const progressMatch = output.match(/progress: (\d+)/);
-          if (progressMatch && progressMatch[1]) {
-            indexingStatus.progress = parseInt(progressMatch[1]);
-          }
-        } else if (output.includes('completed')) {
-          // This is a completion message
-          indexingStatus.message = output;
-        }
-      } catch (e) {
-        console.error('Error parsing progress:', e);
-      }
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      const output = data.toString();
-      console.log(`Indexer stderr output: ${output}`);
-      
-      // Determine if this is an actual error or just an info message
-      if (output.includes('ERROR') || output.includes('Error:')) {
-        indexingStatus.error = output;
-      } else if (output.includes('completed') || output.includes('INFO')) {
-        // This is likely an info message printed to stderr
-        indexingStatus.message = output;
-      }
-    });
-
-    pythonProcess.on('close', (code) => {
-      // If spawn itself failed, the 'error' handler already updated the status
-      // (or spawned the fallback interpreter) — don't overwrite it here.
-      if (hasSpawnFailed()) return;
-
-      console.log(`Indexing process for ${filename} exited with code ${code}`);
-      
-      if (code === 0) {
+    // Kick off indexing on the model server, which runs the indexer
+    // in-process at POST /index. The request resolves only when indexing
+    // finishes (or fails), so indexingStatus reflects the outcome.
+    // timeout: 0 — indexing a large PDF can take a long time; the old
+    // child-process flow had no timeout either, so don't impose one here.
+    axios.post(`${MODEL_SERVER_URL}/index`, { filename: safeFilename }, { timeout: 0 })
+      .then((response) => {
+        console.log(`Indexing of ${filename} completed on model server`);
         indexingStatus.progress = 100;
         indexingStatus.lastIndexed = new Date().toISOString();
-        
-        // REMOVE THIS BLOCK - DO NOT CREATE METADATA FILE HERE
-        // The Python indexer script should create the proper metadata file with chunks
-        
-        // Set success message
-        if (!indexingStatus.message) {
-          indexingStatus.message = `Indexing of ${filename} completed successfully`;
-        }
-        
-        // Clear any error that might have been set incorrectly
-        if (indexingStatus.error && indexingStatus.error.includes('INFO') && indexingStatus.error.includes('completed')) {
-          const message = indexingStatus.error;
-          indexingStatus.error = null;
-          indexingStatus.message = message;
-        }
-      } else {
-        if (!indexingStatus.error) {
-          indexingStatus.error = `Process exited with code ${code}`;
-        }
-      }
-      
-      // Mark indexing as complete regardless of outcome
-      indexingStatus.isIndexing = false;
-    });
-    };
-
-    // Start the indexing process (python3, falling back to python if unavailable)
-    spawnIndexer(pythonBin);
+        indexingStatus.message =
+          (response.data && response.data.message) ||
+          `Indexing of ${filename} completed successfully`;
+        indexingStatus.error = null;
+        indexingStatus.isIndexing = false;
+      })
+      .catch((error) => {
+        console.error(`Indexing of ${filename} failed:`, error.message);
+        const detail =
+          (error.response && error.response.data && (error.response.data.message || error.response.data.error)) ||
+          error.message;
+        indexingStatus.error = `Indexing failed on model server: ${detail}`;
+        indexingStatus.isIndexing = false;
+      });
 
     res.status(202).json({ 
       success: true, 

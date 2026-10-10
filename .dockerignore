@@ -1,0 +1,7 @@
+.git/
+.github/
+**/node_modules/
+**/__pycache__/
+**/.env
+model-server/vector_store/
+.DS_Store
