@@ -28,6 +28,9 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    # depends_on only orders startup; the backend's docker-entrypoint.sh
+    # additionally waits until mongo accepts connections, runs
+    # `migrate-mongo up` (DB migrations), then starts the server.
     depends_on:
       - mongo
       - model-server

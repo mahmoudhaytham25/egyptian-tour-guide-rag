@@ -178,6 +178,22 @@ The same volume mounts keep `data/` and `vector_store/` consistent when running 
 - If `GEMINI_API_KEY` is missing the server starts but indexing, retrieval, and LLM generation all fail — it does not prompt for a key when running non-interactively.
 - Vector files (`*_vectors.npz`) created by the old local embedding model are incompatible with `gemini-embedding-001` — re-index your PDFs after upgrading.
 
+### Database migrations
+
+The backend uses [migrate-mongo](https://github.com/seppevs/migrate-mongo) for MongoDB schema migrations. `backend/migrate-mongo-config.js` reads `MONGODB_URI` exactly like `config/database.js` (env first, `mongodb://localhost:27017/egyptian_history_rag` fallback, database name derived from the URI path), and migrations live in `backend/migrations/`.
+
+Under Docker the backend's `docker-entrypoint.sh` waits for MongoDB to accept connections, runs `npx migrate-mongo up`, and only then starts `node server.js` — so `docker compose up` auto-migrates on every boot (pending migrations only; applied ones are tracked in the `changelog` collection). For local development, run them manually:
+
+```bash
+cd backend
+npm run migrate:status              # list applied / pending migrations
+npm run migrate:up                  # apply pending migrations
+npm run migrate:down                # roll back the most recent migration
+npm run migrate:create -- my-change # scaffold a new timestamped migration file
+```
+
+The initial migration (`migrations/…-initial-indexes.js`) only creates indexes implied by the Mongoose models: a unique `email_1` index on `users` (same name Mongoose auto-builds from `unique: true`, so it is a no-op where that index already exists — the migration codifies it explicitly), a compound `{ userId, isActive, updatedAt }` index on `conversations` matching the list query + sort in `chatController.getConversations`, and `{ conversationId, timestamp }` on `messages` matching the per-conversation message fetch + sort.
+
 ## Running the System
 
 ### Start the Flask Model Services (Port 5050)
@@ -531,6 +547,9 @@ egyptian-tour-guide-rag/
 │   │   └── chat.js                    # Chat endpoints (conversations, messages)
 │   ├── services/
 │   │   └── emailService.js            # Email utility (Ethereal/dev or real SMTP)
+│   ├── migrations/                    # migrate-mongo database migrations
+│   ├── migrate-mongo-config.js        # migrate-mongo config (reads MONGODB_URI)
+│   ├── docker-entrypoint.sh           # Waits for MongoDB, runs migrations, starts app
 │   ├── server.js                      # Main Express app entry point
 │   └── package.json                   # Node.js dependencies & scripts
 │

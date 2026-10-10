@@ -65,6 +65,18 @@ Then open http://localhost:3000.
 
 Requires MongoDB running locally and a `.env` file in **each** of `backend/` and `model-server/` — see the `.env.example` files and the detailed guide. Indexing goes through the model server's `POST /index` endpoint, so the model server must be running before indexing a document.
 
+### Database migrations
+
+The backend uses [migrate-mongo](https://github.com/seppevs/migrate-mongo) for MongoDB schema migrations (indexes, collections). Config: `backend/migrate-mongo-config.js` (reads `MONGODB_URI` like the app); migrations live in `backend/migrations/`. `docker compose up` runs them automatically — the backend entrypoint waits for MongoDB, applies pending migrations, then starts the API.
+
+```bash
+cd backend
+npm run migrate:status        # show applied/pending migrations
+npm run migrate:up            # apply pending migrations
+npm run migrate:down          # roll back the last migration
+npm run migrate:create -- my-change   # scaffold a new migration
+```
+
 **Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 
 ## License
