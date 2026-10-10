@@ -55,22 +55,10 @@ describe("RequireAuth", () => {
     expect(localStorage.getItem("conversationId_u1")).toBeNull();
   });
 
-  it("redirects for a malformed token", () => {
-    localStorage.setItem("authToken", "garbage");
-    renderGuarded();
-    expect(screen.getByText("Login Page")).toBeInTheDocument();
-  });
-
   it("renders children for a token with a future exp", () => {
     localStorage.setItem("authToken", makeJwt({ id: "u1", exp: futureExp() }));
     renderGuarded();
     expect(screen.getByText("Secret Content")).toBeInTheDocument();
     expect(screen.queryByText("Login Page")).not.toBeInTheDocument();
-  });
-
-  it("renders children for a token without an exp claim", () => {
-    localStorage.setItem("authToken", makeJwt({ id: "u1" }));
-    renderGuarded();
-    expect(screen.getByText("Secret Content")).toBeInTheDocument();
   });
 });

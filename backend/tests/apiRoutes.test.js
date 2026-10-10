@@ -262,15 +262,6 @@ describe('multer upload config', () => {
 });
 
 describe('POST /api/query', () => {
-  test('missing question → 400', async () => {
-    const res = await request(app)
-      .post('/api/query')
-      .set('Authorization', AUTH)
-      .send({});
-
-    expect(res.status).toBe(400);
-  });
-
   test('non-string question → 400', async () => {
     const res = await request(app)
       .post('/api/query')

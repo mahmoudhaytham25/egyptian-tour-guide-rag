@@ -49,23 +49,6 @@ test("registering through the form lands on the chat page", async ({
   ).toBeVisible();
 });
 
-test("logging in through the form lands on the chat page", async ({
-  page,
-  request,
-}) => {
-  const email = uniqueEmail();
-  await signupViaApi(request, email);
-
-  await loginViaForm(page, email);
-
-  await expect(
-    page.getByRole("button", { name: "+ New chat" })
-  ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: /Egyptian History Assistant/ })
-  ).toBeVisible();
-});
-
 test("a new chat is persisted and appears in the sidebar", async ({
   page,
   request,
@@ -73,6 +56,10 @@ test("a new chat is persisted and appears in the sidebar", async ({
   const email = uniqueEmail();
   await signupViaApi(request, email);
   await loginViaForm(page, email);
+
+  await expect(
+    page.getByRole("heading", { name: /Egyptian History Assistant/ })
+  ).toBeVisible();
 
   // The Flask model server isn't part of e2e, so /api/query is fulfilled at
   // the network layer. Everything else — including the lazy

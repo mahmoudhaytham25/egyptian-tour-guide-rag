@@ -11,10 +11,6 @@ from rag.utils.env_loader import get_api_key, load_environment
 
 
 class TestGetApiKey:
-    def test_returns_env_var_when_set(self, monkeypatch):
-        monkeypatch.setenv("TEST_KEY_ABC", "secret-123")
-        assert get_api_key("TEST_KEY_ABC", prompt_if_missing=False) == "secret-123"
-
     def test_returns_env_var_when_set_even_with_prompt_enabled(self, monkeypatch):
         monkeypatch.setenv("TEST_KEY_SET", "secret-xyz")
         assert get_api_key("TEST_KEY_SET", prompt_if_missing=True) == "secret-xyz"

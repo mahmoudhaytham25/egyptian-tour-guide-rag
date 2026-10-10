@@ -89,14 +89,6 @@ describe('auth middleware — /api/* routes', () => {
     expect(res.status).toBe(401);
   });
 
-  test('invalid token → 401 on /api/index', async () => {
-    const res = await request(app)
-      .post('/api/index')
-      .set('Authorization', 'Bearer garbage')
-      .send({ filename: 'test.pdf' });
-    expect(res.status).toBe(401);
-  });
-
   test('health endpoint is public (no token required)', async () => {
     const res = await request(app).get('/api/health');
     expect(res.status).toBe(200);

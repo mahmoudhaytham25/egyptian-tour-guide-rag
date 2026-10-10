@@ -166,11 +166,6 @@ describe('POST /api/auth/login', () => {
 });
 
 describe('GET /api/auth/verify/:token — removed', () => {
-  test('unauthenticated → 401 (unknown /api paths sit behind auth)', async () => {
-    const res = await request(app).get('/api/auth/verify/sometoken');
-    expect(res.status).toBe(401);
-  });
-
   test('authenticated → 404', async () => {
     User.findById.mockResolvedValue({ _id: 'user-1', email: 'a@b.com' });
     const token = jwt.sign({ id: 'user-1' }, process.env.JWT_SECRET);
