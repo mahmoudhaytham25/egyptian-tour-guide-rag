@@ -1,6 +1,6 @@
 # Egyptian History RAG System with Gemini 2.0 Flash
 
-A Retrieval-Augmented Generation (RAG) system for querying large Egyptian history PDF documents, powered by Gemini 2.0 for language generation and Sentence Transformers for embeddings.
+A Retrieval-Augmented Generation (RAG) system for querying large Egyptian history PDF documents, powered by Gemini 2.0 for language generation and the Gemini embeddings API (`text-embedding-004`) for embeddings.
 
 ## Key Features
 
@@ -43,8 +43,7 @@ The diagram shows:
 
 - Python 3.8+
 - Node.js 16+
-- Google Cloud account (for Gemini API)
-- GPU recommended (not required)
+- Google Cloud account (for the Gemini API — used for both LLM generation and embeddings, so network access is required)
 - MongoDB 6.0+ (local installation or Atlas cloud)
 - MongoDB Compass (GUI recommended)
 
@@ -151,7 +150,7 @@ The full stack (frontend, backend, model server, MongoDB) is defined in `docker-
 
     | Variable | Required | Notes |
     |----------|----------|-------|
-    | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 2.0 Flash |
+    | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 2.0 Flash and `text-embedding-004` embeddings (indexing and querying) |
     | `JWT_SECRET` | No | Backend JWT signing secret; falls back to `dev-only-secret-change-me` — always set a real value outside local dev |
 
 2. **Build and start everything**:
@@ -174,9 +173,10 @@ The same volume mounts keep `data/` and `vector_store/` consistent when running 
 
 ### Docker caveats
 
-- First `up` is slow: the model-server image installs torch/transformers (~GBs) and the embedding model downloads on first container start. `/query` calls will fail until model initialization finishes — check `docker compose logs -f model-server`.
+- Embeddings run through the Gemini API (`text-embedding-004`) — there is no local model download, so the model-server image is small and first `up` is fast.
 - The model server binds `0.0.0.0` only inside Docker (via the `HOST` env var); locally it still defaults to `127.0.0.1`.
-- If `GEMINI_API_KEY` is missing the server starts but LLM features return errors — it no longer prompts for a key when running non-interactively.
+- If `GEMINI_API_KEY` is missing the server starts but indexing, retrieval, and LLM generation all fail — it does not prompt for a key when running non-interactively.
+- Vector files (`*_vectors.npz`) created by the old local embedding model are incompatible with `text-embedding-004` — re-index your PDFs after upgrading.
 
 ## Running the System
 
@@ -187,7 +187,7 @@ The same volume mounts keep `data/` and `vector_store/` consistent when running 
 cd model-server
 python model_server.py
 ```
-This loads the models and starts the Flask API at `http://localhost:5050` (`/health`, `/query`, `/index`).
+This configures the Gemini API clients and starts the Flask API at `http://localhost:5050` (`/health`, `/query`, `/index`). Both the LLM and embeddings are remote — a valid `GEMINI_API_KEY` is required.
 
 ### Start the Node.js Server (Port 3001)
 
@@ -500,9 +500,9 @@ Modify `config.json` to adjust system behavior:
 3. **Port Conflicts**:
    - Change `PORT` in `model-server/.env` (Flask, default 5050) or `backend/.env` (Express, default 3001) if occupied. If you change the Flask port, update `MODEL_SERVER_URL` in `backend/.env` to match.
 
-4. **CUDA Out of Memory**:
-   - Restart the Flask service to clear memory
-   - Reduce batch sizes in config
+4. **Embedding API Errors / Rate Limits**:
+   - The indexer retries failed embedding requests a few times with backoff, but large PDFs can still hit Gemini rate limits — wait and retry indexing
+   - Verify `GEMINI_API_KEY` is set and has quota in Google AI Studio
 
 5. **Authentication Issues**:
    - Check that JWT_SECRET is properly set in .env

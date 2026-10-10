@@ -27,7 +27,7 @@ backend/           Express API (port 3001) — JWT auth, conversations, RAG endp
      │                              └─ calls model-server /query + /index over HTTP
 model-server/      Flask model services (port 5050) + RAG pipeline
                    ├─ rag/          classifier, indexer, retriever, generator
-                   ├─ models/       Gemini 2.0 Flash LLM + sentence-transformer embeddings
+                   ├─ models/       Gemini 2.0 Flash LLM + Gemini embeddings (text-embedding-004)
                    ├─ data/         uploaded PDFs (incl. bundled egyptian_history.pdf)
                    └─ times_places/ monument dataset for trip scheduling
 
@@ -36,7 +36,7 @@ MongoDB            users, conversations, chat history
 
 ## Stack
 
-Python (Flask, Sentence Transformers, PyMuPDF) · Node.js (Express) · React · MongoDB · Google Gemini 2.0 Flash · JWT
+Python (Flask, PyMuPDF) · Node.js (Express) · React · MongoDB · Google Gemini 2.0 Flash + text-embedding-004 · JWT
 
 ## Getting Started
 
@@ -53,7 +53,7 @@ Then open http://localhost:3000.
 
 - **`GEMINI_API_KEY`** is required by the model server — get one at [Google AI Studio](https://aistudio.google.com/app/apikey).
 - **`JWT_SECRET`** is optional; compose falls back to a dev-only value. Set a long random string for real deployments.
-- First start is slow: the model-server image installs torch/sentence-transformers, and the embedding model downloads on first run. Queries will return 502 until `/health` reports the models loaded.
+- `GEMINI_API_KEY` is required for indexing AND querying — embeddings run through the Gemini API too (`text-embedding-004`), so there is no model download and first start is fast. If you previously indexed with the old local model, re-index: the new embeddings are incompatible with old vector files.
 - Named volumes keep MongoDB data, uploaded PDFs (`rag-data`, seeded with `data/egyptian_history.pdf`), and the generated vector index (`vector-store`) persistent across restarts. Upload a PDF + index it once (Documents UI) or re-index the bundled PDF after a fresh `up`.
 
 ### Run locally (without Docker)

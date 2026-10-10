@@ -38,19 +38,22 @@ def initialize_models():
     """Initialize and load all models at startup"""
     global embedding_model, llm_model, retriever, generator
     
-    logger.info("Initializing models - this may take a minute...")
+    logger.info("Initializing models...")
     
-    # Get API key using our secure method.
+    # Get API key using our secure method. Both the LLM and the embedding
+    # model use the remote Gemini API, so this key is required for indexing
+    # AND querying — nothing is downloaded locally.
     # Only prompt interactively when attached to a TTY — inside a container
     # (or any non-interactive environment) input() would raise EOFError and
     # crash startup, so we skip prompting there and just warn.
     api_key = get_api_key("GEMINI_API_KEY", prompt_if_missing=sys.stdin.isatty())
     if not api_key:
-        logger.warning("No Gemini API key provided. Some features may not work.")
+        logger.warning("No Gemini API key provided. Indexing, retrieval, and generation will not work.")
     else:
         logger.info("Gemini API key found")
     
-    # Initialize embedding model
+    # Initialize embedding model (configures the Gemini embeddings API —
+    # no local model download, so this is fast)
     embedding_model = EmbeddingModel()
     embedding_model.load_model()
     
