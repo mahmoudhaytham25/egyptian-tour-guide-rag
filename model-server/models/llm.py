@@ -78,7 +78,7 @@ class LLMModel:
             logger.error(f"Error loading model: {str(e)}")
             return False
     
-    def generate(self, prompt, max_tokens=512, temperature=0.2):
+    def generate(self, prompt, max_tokens=4096, temperature=0.2):
         """
         Generate text based on the prompt using Gemini API.
         

@@ -62,7 +62,7 @@ class Generator:
         """
         
         # Get classification from model
-        response = self.llm.generate(classification_prompt, max_tokens=20)
+        response = self.llm.generate(classification_prompt, max_tokens=1024)
         
         # Normalize response
         response = response.lower().strip()
@@ -99,7 +99,7 @@ class Generator:
         city=<extracted city>;day=<extracted day>
         """
         
-        response = self.llm.generate(parameter_prompt, max_tokens=50).strip()
+        response = self.llm.generate(parameter_prompt, max_tokens=1024).strip()
         
         # Parse response
         try:
