@@ -96,20 +96,72 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-  docker-build:
+  compose-smoke:
     runs-on: ubuntu-latest
+    # compose interpolates ${VAR:?} at parse time — dummy values get past
+    # validation; the model server only warns on a missing/invalid Gemini
+    # key at boot (it's only used on real API calls, which the smoke
+    # assertions never make).
+    env:
+      GEMINI_API_KEY: ci-dummy
+      JWT_SECRET: ci-dummy-secret
+      INTERNAL_API_TOKEN: ci-dummy-token
     steps:
       - uses: actions/checkout@v7
-      # compose interpolates ${VAR:?} at parse time even for `build`, so
-      # dummy values are required to get past validation. Building all three
-      # images is also the only CI coverage of model-server/requirements.txt
-      # (the model-server-tests job installs requirements-dev.txt only).
       - name: Build all images
-        env:
-          GEMINI_API_KEY: ci-dummy
-          JWT_SECRET: ci-dummy
-          INTERNAL_API_TOKEN: ci-dummy
         run: docker compose build
+      - name: Start the stack
+        run: docker compose up -d
+      # Waits on the proxied health endpoint — that one URL proves nginx is
+      # up, /api is forwarded to the backend, the backend is up, and its
+      # compose depends_on chain (mongo + model-server healthy, migrations
+      # applied) succeeded.
+      - name: Wait for healthy services
+        run: |
+          for i in $(seq 1 90); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/health || true)" = "200" ]; then
+              echo "stack healthy after ~$((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "stack did not become healthy"
+          docker compose ps
+          docker compose logs --tail 60
+          exit 1
+      - name: Smoke assertions
+        run: |
+          set -e
+          # Static SPA serves with the hardened CSP (same-origin 'self' —
+          # the /api proxy means no extra connect-src origin is needed).
+          curl -sfI http://localhost:3000/ | \
+            grep -i "content-security-policy:.*connect-src 'self'"
+
+          # /api is proxied through nginx to the backend.
+          curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'
+
+          # The backend's own published port still answers (dev path —
+          # vite dev / local tooling hit it directly).
+          curl -sf http://localhost:3001/api/health | grep -q '"status":"ok"'
+
+          # A full auth round-trip through the proxy: JSON body through
+          # nginx -> backend -> mongo -> signed JWT back out.
+          curl -sf -X POST http://localhost:3000/api/auth/signup \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@ci.dev","password":"smoke-pass-123"}' | \
+            grep -q '"token"'
+
+          # The model server must NOT be published on the host — only the
+          # backend reaches it (X-Internal-Token gated).
+          if curl -sf --max-time 3 http://localhost:5050/health; then
+            echo "model-server unexpectedly reachable from the host"
+            exit 1
+          fi
+
+          echo "all smoke assertions passed"
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
 
   frontend-e2e:
     runs-on: ubuntu-latest
