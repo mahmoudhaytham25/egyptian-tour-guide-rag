@@ -9,6 +9,15 @@ class DeadlineExceeded(Exception):
     import."""
 
 
+class RetrievalError(Exception):
+    """Raised when retrieval genuinely can't happen — the vector store is
+    missing/corrupt/generation-mismatched, or the query-embedding call
+    failed. Distinct from an empty result list, which means the index
+    loaded fine but no chunk cleared the similarity threshold. /query
+    turns this into success:false so the backend never persists an
+    ungrounded answer built on an empty context."""
+
+
 def check_deadline(deadline):
     """Hard stop before another API attempt on a blown budget.
 

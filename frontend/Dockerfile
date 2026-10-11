@@ -18,7 +18,15 @@ RUN npm run build
 # Unprivileged nginx listens on 8080 (compose maps 3000:8080).
 FROM nginxinc/nginx-unprivileged:alpine
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Origin the CSP connect-src allows (see default.conf.template). The image's
+# docker-entrypoint renders /etc/nginx/templates/*.template via envsubst at
+# container start, so this is a RUNTIME setting — set it to the ORIGIN part
+# of VITE_API_URL (scheme://host[:port], no /api path) with
+# `docker run -e API_CONNECT_SRC=...` or compose `environment:` to point the
+# same image at any backend without rebuilding.
+ENV API_CONNECT_SRC=http://localhost:3001
+
+COPY default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

@@ -12,7 +12,7 @@ import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.embedding import EmbeddingModel
-from rag.errors import DeadlineExceeded
+from rag.errors import DeadlineExceeded, RetrievalError
 from rag.utils import get_vector_store_dir, get_times_dir
 
 # Configure logging
@@ -70,6 +70,10 @@ class Retriever:
         try:
             if not os.path.exists(self.vector_file) or not os.path.exists(self.metadata_file):
                 logger.error(f"Vector files not found for {self.pdf_name}")
+                # Keep the "False ⇒ unloaded" contract — stale in-memory
+                # data must not keep answering once the files are gone.
+                self.embeddings = None
+                self.metadata = None
                 return False
             
             logger.info(f"Loading vectors from {self.vector_file}")
@@ -115,6 +119,12 @@ class Retriever:
         except Exception as e:
             logger.error(f"Error loading vectors: {str(e)}")
             logger.error(traceback.format_exc())
+            # A partially loaded pair (e.g. vectors read, then a
+            # generation-mismatch raise) must not stay reachable — a
+            # later search would skip the load and score chunks against
+            # the wrong embeddings. Failure means "unloaded".
+            self.embeddings = None
+            self.metadata = None
             return False
     
     def search(self, query, top_k=10, score_thresh=0.2, deadline=None):
@@ -129,7 +139,17 @@ class Retriever:
                 the query embedding's retry loop
 
         Returns:
-            list: List of relevant chunks with metadata and scores
+            list: List of relevant chunks with metadata and scores —
+                empty when the index loaded fine but no chunk cleared
+                score_thresh (a legitimate "no relevant chunks" the
+                generator intentionally answers around)
+
+        Raises:
+            RetrievalError: The vector store can't be loaded or the query
+                embedding can't be generated — retrieval genuinely
+                failed, not "no relevant chunks".
+            DeadlineExceeded: The caller's time budget blew out mid-search
+                (propagates unchanged — it's cancellation, not failure).
         """
         try:
             # argsort(scores)[-0:] is the whole array — a non-positive
@@ -139,14 +159,21 @@ class Retriever:
 
             if self.embeddings is None or self.metadata is None:
                 if not self.load_vectors():
-                    return []
+                    # Unindexed documents are already 404'd upstream by
+                    # _document_is_indexed — reaching this point with an
+                    # unloadable store means corrupt/half-written files
+                    # or a generation mismatch: a broken index, not a
+                    # legitimate empty result.
+                    raise RetrievalError(
+                        f"vector store for '{self.pdf_name}' could not be loaded")
 
             # Snapshot to locals — a concurrent invalidation (the indexing
             # path clears self.embeddings/self.metadata) must not turn them
             # into None between the check above and np.dot below.
             emb, meta = self.embeddings, self.metadata
             if emb is None or meta is None:
-                return []
+                raise RetrievalError(
+                    f"vector store for '{self.pdf_name}' unloaded mid-search")
 
             # Ensure top_k is not larger than available data
             top_k = min(top_k, len(meta))
@@ -155,8 +182,10 @@ class Retriever:
             query_embedding = self.embedding_model.get_query_embedding(
                 query, deadline=deadline)
             if query_embedding is None:
-                logger.error("Failed to generate query embedding")
-                return []
+                # The embedding API failed — answering from the resulting
+                # empty context would be silently ungrounded, so this is
+                # an error, not "no relevant chunks".
+                raise RetrievalError("query embedding could not be generated")
 
             # Calculate similarity scores
             similarity_scores = np.dot(emb, query_embedding)
@@ -191,10 +220,14 @@ class Retriever:
             # Cancellation, not a search failure — let it reach the 504
             # handler instead of collapsing to an empty result set.
             raise
+        except RetrievalError:
+            # Already labelled a retrieval failure — don't re-wrap.
+            raise
         except Exception as e:
             logger.error(f"Error searching: {str(e)}")
             logger.error(traceback.format_exc())
-            return []
+            raise RetrievalError(
+                f"retrieval failed for '{self.pdf_name}': {e}") from e
 
     def getTimes(self, city=None):
         """

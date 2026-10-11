@@ -10,6 +10,7 @@ from models.embedding import EmbeddingModel
 from models.llm import LLMModel
 from rag.retriever import Retriever
 from rag.generator import Generator, DeadlineExceeded
+from rag.errors import RetrievalError
 from rag.indexer import PDFIndexer
 from rag.utils import get_data_dir, get_vector_store_dir
 from rag.utils.env_loader import load_environment, get_api_key
@@ -285,6 +286,14 @@ def query():
         # lets the backend tell this apart from an upstream timeout.
         logger.warning("Query aborted by caller time budget: %s", e)
         return jsonify({"success": False, "error": str(e)}), 504
+    except RetrievalError as e:
+        # The vector store is unreadable or the embedding API failed —
+        # retrieval genuinely couldn't happen. success:false + 500 keeps
+        # the backend from persisting an ungrounded answer (it maps the
+        # error to a 502) instead of an empty-context reply that reads
+        # like a real one.
+        logger.error("Retrieval failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
     except Exception:
         # success:false + 5xx tells the backend NOT to persist an assistant
         # message — generation genuinely failed rather than producing a

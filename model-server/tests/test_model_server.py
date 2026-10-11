@@ -370,6 +370,48 @@ class TestQuery:
         assert body["success"] is False
         assert body["error"]
 
+    def test_retrieval_error_returns_success_false(self, client):
+        # A broken store / dead embedding API is an error, not an
+        # answer — the backend maps this to a 502 and persists nothing.
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+        client.fake_generator.error = model_server.RetrievalError(
+            "vector store could not be loaded")
+        resp = client.post("/query", json={"query": "q"}, headers=AUTH)
+        assert resp.status_code == 500
+        body = resp.get_json()
+        assert body["success"] is False
+        assert "vector store" in body["error"]
+
+    def test_corrupt_store_errors_instead_of_empty_context_answer(self, client):
+        # touch_vectors leaves an empty .npz — it passes the
+        # _document_is_indexed precheck but a real retriever can't load
+        # it. Previously that silently produced an ungrounded
+        # success:true answer; now the RetrievalError must surface.
+        # The retriever's file attrs are pointed at tmp_path directly —
+        # it resolves its store dir at construction from rag.retriever's
+        # own get_vector_store_dir, which the client fixture doesn't patch.
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+
+        retriever = model_server.Retriever(
+            "egyptian_history", model_server.TIMES_NAME)
+        retriever.vector_file = str(
+            client.vector_store_dir / "egyptian_history_vectors.npz")
+        retriever.metadata_file = str(
+            client.vector_store_dir / "egyptian_history_metadata.json")
+        with model_server.retrievers_lock:
+            model_server.retrievers["egyptian_history"] = retriever
+
+        def _retrieve_then_answer(query, top_k=10, retriever=None, **kwargs):
+            retriever.search(query, top_k=top_k)
+            return client.fake_generator.response
+
+        client.fake_generator.generate_response = _retrieve_then_answer
+        resp = client.post("/query", json={"query": "q"}, headers=AUTH)
+        assert resp.status_code == 500
+        body = resp.get_json()
+        assert body["success"] is False
+        assert body["error"]
+
     def test_chat_history_sanitized(self, client):
         touch_vectors(client.vector_store_dir, "egyptian_history")
         resp = client.post("/query", json={

@@ -1,14 +1,19 @@
 """
 Tests for the vector-store pair: PDFIndexer.save_vectors and
-Retriever.load_vectors/search — generation-stamp pairing and the
-top_k<=0 guard. All filesystem access is redirected to tmp_path; no
-model or API calls happen (search() short-circuits before embedding
-when top_k is non-positive and load_vectors is exercised directly).
+Retriever.load_vectors/search — generation-stamp pairing, the
+top_k<=0 guard, and the RetrievalError contract (a broken store or a
+failed embedding call must raise, never masquerade as an empty result).
+All filesystem access is redirected to tmp_path; no model or API calls
+happen (search() short-circuits before embedding when top_k is
+non-positive, load_vectors is exercised directly, and the embedding
+model is stubbed wherever a search reaches it).
 """
 import json
 
 import numpy as np
+import pytest
 
+from rag.errors import DeadlineExceeded, RetrievalError
 from rag.indexer import PDFIndexer
 from rag.retriever import Retriever
 
@@ -127,3 +132,89 @@ class TestTopKGuard:
     def test_top_k_still_returns_results(self, tmp_path):
         results = _loaded_retriever(tmp_path).search("q", top_k=2)
         assert len(results) == 2
+
+
+class TestSearchFailures:
+    """Retrieval failures raise RetrievalError — [] is reserved for "the
+    index loaded fine and nothing cleared the threshold"."""
+
+    def test_missing_files_raise(self, tmp_path):
+        # /query 404s unindexed documents upstream, but if a search still
+        # reaches the loader (files removed after the precheck, a stale
+        # cached retriever) the failure must not read as an empty result.
+        retriever = _make_retriever(tmp_path)
+        with pytest.raises(RetrievalError):
+            retriever.search("q")
+
+    def test_generation_mismatch_raises(self, tmp_path):
+        # A reader mid-reindex observes mismatched generation stamps —
+        # a corrupt pairing must error, not return "no relevant chunks".
+        indexer = _make_indexer(tmp_path)
+        _save(indexer)
+        (tmp_path / "doc_metadata.json").write_text(json.dumps(
+            {"generation": "gen-other",
+             "chunks": [{"text": "a"}, {"text": "b"}, {"text": "c"}]}))
+        retriever = _make_retriever(tmp_path)
+        with pytest.raises(RetrievalError):
+            retriever.search("q")
+
+    def test_unreadable_vectors_raise(self, tmp_path):
+        # Both files exist (the /query precheck passes) but the .npz is
+        # garbage — load fails and the search surfaces it as an error.
+        (tmp_path / "doc_vectors.npz").write_bytes(b"not an npz")
+        (tmp_path / "doc_metadata.json").write_text("[]")
+        retriever = _make_retriever(tmp_path)
+        with pytest.raises(RetrievalError):
+            retriever.search("q")
+
+    def test_failed_load_does_not_leave_stale_state(self, tmp_path):
+        # load_vectors assigns self.embeddings before the generation
+        # check can raise — a failed load must still leave the retriever
+        # unloaded so a later search can't score against partial data.
+        indexer = _make_indexer(tmp_path)
+        _save(indexer)
+        (tmp_path / "doc_metadata.json").write_text(json.dumps(
+            {"generation": "gen-other",
+             "chunks": [{"text": "a"}, {"text": "b"}, {"text": "c"}]}))
+        retriever = _make_retriever(tmp_path)
+        with pytest.raises(RetrievalError):
+            retriever.search("q")
+        assert retriever.embeddings is None
+        assert retriever.metadata is None
+
+    def test_embedding_failure_raises(self, tmp_path):
+        retriever = _loaded_retriever(tmp_path)
+
+        class _DeadEmbedding:
+            def get_query_embedding(self, query, deadline=None):
+                return None
+
+        retriever.embedding_model = _DeadEmbedding()
+        with pytest.raises(RetrievalError):
+            retriever.search("q")
+
+    def test_deadline_exceeded_propagates_unwrapped(self, tmp_path):
+        # Cancellation is not a retrieval failure — it must reach the
+        # 504 handler unchanged, not collapse into RetrievalError.
+        retriever = _loaded_retriever(tmp_path)
+
+        class _DeadlineEmbedding:
+            def get_query_embedding(self, query, deadline=None):
+                raise DeadlineExceeded("budget blown")
+
+        retriever.embedding_model = _DeadlineEmbedding()
+        with pytest.raises(DeadlineExceeded):
+            retriever.search("q")
+
+    def test_below_threshold_still_returns_empty(self, tmp_path):
+        # Successful load + a genuinely irrelevant query is a legitimate
+        # empty result — the generator intentionally falls back to model
+        # knowledge for these.
+        retriever = _loaded_retriever(tmp_path)
+
+        class _ZeroEmbedding:
+            def get_query_embedding(self, query, deadline=None):
+                return np.zeros(3, dtype=np.float32)
+
+        retriever.embedding_model = _ZeroEmbedding()
+        assert retriever.search("q") == []
