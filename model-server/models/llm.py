@@ -34,6 +34,40 @@ INITIAL_BACKOFF_SECONDS = 2.0
 DEFAULT_TOP_P = 0.95
 DEFAULT_TOP_K = 40
 
+# Model fallback chain. Each Gemini model has a SEPARATE quota counter, so
+# when the primary hits a 429 (per-minute or daily), the request retries on
+# a lower-grade model instead of burning 65s waits on a quota that can't
+# recover. Ordered descending by generation — verified against the models
+# list endpoint for a live key. Override with
+# GEMINI_FALLBACK_MODELS="model-a,model-b".
+def _fallback_models():
+    configured = os.environ.get("GEMINI_FALLBACK_MODELS", "")
+    if configured.strip():
+        return [m.strip() for m in configured.split(",") if m.strip()]
+    return [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+
+
+def _is_model_unavailable(error):
+    """Model-name errors (404 / unsupported) — the named model doesn't
+    exist or can't generate, so hop the chain rather than failing or
+    retrying a guaranteed repeat."""
+    code = getattr(error, "code", None)
+    if code == 404:
+        return True
+    message = str(error).lower()
+    return ("not found" in message or "not supported" in message
+            or "does not exist" in message)
+
+
 class LLMModel:
     def __init__(self, model_name="gemini-3.8-flash"):
         """
@@ -92,40 +126,63 @@ class LLMModel:
 
         from google.genai import types
 
+        # Try the configured model first, then each fallback tier. A 429 on
+        # one model doesn't touch the next model's quota, so a rate-limit
+        # hop costs one rejected call rather than a 65s wait — especially
+        # for daily-quota 429s which no wait can fix.
+        models_to_try = [self.model_name] + [
+            m for m in _fallback_models() if m != self.model_name
+        ]
         delay = INITIAL_BACKOFF_SECONDS
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                # Generate content with an explicit per-request timeout so a
-                # hung API call can't tie up a worker thread indefinitely
-                response = self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=temperature,
-                        max_output_tokens=max_tokens,
-                        top_p=DEFAULT_TOP_P,
-                        top_k=DEFAULT_TOP_K,
-                        # HttpOptions.timeout is in MILLISECONDS
-                        http_options=types.HttpOptions(
-                            timeout=GENERATE_TIMEOUT_SECONDS * 1000
+        last_error = None
+        for model_index, model in enumerate(models_to_try):
+            has_fallback = model_index < len(models_to_try) - 1
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    # Generate content with an explicit per-request timeout so a
+                    # hung API call can't tie up a worker thread indefinitely
+                    response = self.client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=temperature,
+                            max_output_tokens=max_tokens,
+                            top_p=DEFAULT_TOP_P,
+                            top_k=DEFAULT_TOP_K,
+                            # HttpOptions.timeout is in MILLISECONDS
+                            http_options=types.HttpOptions(
+                                timeout=GENERATE_TIMEOUT_SECONDS * 1000
+                            ),
                         ),
-                    ),
-                )
+                    )
 
-                # Return the text response
-                return response.text
-            except Exception as e:
-                # Non-retryable errors (400-class rejections) fail
-                # identically on every attempt — surface them immediately.
-                if attempt == MAX_RETRIES or not is_retryable_error(e):
-                    logger.error(f"Error generating text: {str(e)}")
-                    raise
-                # Per-minute quota exhaustion needs a long wait, not jitter —
-                # regular transient errors keep the short exponential backoff.
-                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
-                logger.warning(
-                    f"LLM request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
-                    f"retrying in {wait:.0f}s"
-                )
-                time.sleep(wait)
-                delay *= 2
+                    # Return the text response
+                    return response.text
+                except Exception as e:
+                    last_error = e
+                    # Rate-limited on this tier — hop to the next model's
+                    # separate quota instead of waiting this one out. A
+                    # model that doesn't exist on this key gets the same
+                    # treatment — retrying it can only fail again.
+                    if has_fallback and (is_rate_limit_error(e) or _is_model_unavailable(e)):
+                        reason = "rate-limited" if is_rate_limit_error(e) else "unavailable"
+                        logger.warning(
+                            f"{model} {reason} — falling back to "
+                            f"{models_to_try[model_index + 1]} for this request"
+                        )
+                        break
+                    # Non-retryable errors (400-class rejections) fail
+                    # identically on every attempt — surface them immediately.
+                    if attempt == MAX_RETRIES or not is_retryable_error(e):
+                        logger.error(f"Error generating text: {str(e)}")
+                        raise
+                    # Per-minute quota exhaustion needs a long wait, not jitter —
+                    # regular transient errors keep the short exponential backoff.
+                    wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
+                    logger.warning(
+                        f"LLM request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
+                        f"retrying in {wait:.0f}s"
+                    )
+                    time.sleep(wait)
+                    delay *= 2
+        raise last_error
