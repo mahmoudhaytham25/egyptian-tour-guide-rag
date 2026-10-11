@@ -8,25 +8,21 @@ RUN npm ci
 
 COPY . .
 
-# Vite inlines this at build time (see src/services/api.js)
-ARG VITE_API_URL=http://localhost:3001/api
+# Vite inlines this at build time (see src/services/api.js). "/api" makes
+# the browser call the API same-origin — the serve-stage nginx proxies it
+# to the backend container, so no cross-origin config is needed anywhere.
+ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
 
 RUN npm run build
 
 # ---- Serve stage ----
-# Unprivileged nginx listens on 8080 (compose maps 3000:8080).
+# Unprivileged nginx listens on 8080 (compose maps 3000:8080). The config
+# is fully static and used as-is — it also reverse-proxies /api to the
+# backend service (see nginx.conf).
 FROM nginxinc/nginx-unprivileged:alpine
 
-# Origin the CSP connect-src allows (see default.conf.template). The image's
-# docker-entrypoint renders /etc/nginx/templates/*.template via envsubst at
-# container start, so this is a RUNTIME setting — set it to the ORIGIN part
-# of VITE_API_URL (scheme://host[:port], no /api path) with
-# `docker run -e API_CONNECT_SRC=...` or compose `environment:` to point the
-# same image at any backend without rebuilding.
-ENV API_CONNECT_SRC=http://localhost:3001
-
-COPY default.conf.template /etc/nginx/templates/default.conf.template
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

@@ -80,15 +80,10 @@ services:
     build:
       context: ./frontend
       args:
-        # Baked into the static bundle at build time — must be the address
-        # the *browser* uses to reach the backend (localhost, port-mapped).
-        VITE_API_URL: http://localhost:3001/api
-    environment:
-      # Runtime counterpart to VITE_API_URL: rendered into the CSP's
-      # connect-src by the image's docker-entrypoint (envsubst). Must be
-      # the ORIGIN of the API the browser calls — scheme://host[:port],
-      # no /api path. Override in .env for a real deploy; no rebuild.
-      API_CONNECT_SRC: ${API_CONNECT_SRC:-http://localhost:3001}
+        # Baked into the static bundle at build time. "/api" = same-origin:
+        # the frontend's nginx proxies /api/* to the backend service (see
+        # frontend/nginx.conf), so the CSP needs no runtime configuration.
+        VITE_API_URL: /api
     restart: unless-stopped
     depends_on:
       backend:
@@ -96,7 +91,7 @@ services:
     ports:
       - "3000:8080"
     # nginx-unprivileged listens on 8080 (see
-    # frontend/default.conf.template); the alpine-based image ships busybox
+    # frontend/nginx.conf); the alpine-based image ships busybox
     # wget for the probe.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]

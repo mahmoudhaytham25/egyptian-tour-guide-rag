@@ -156,8 +156,7 @@ The full stack (frontend, backend, model server, MongoDB) is defined in `docker-
     | `GEMINI_API_KEY` | Yes | Used by the model server for Gemini 3.8 Flash and `gemini-embedding-001` embeddings (indexing and querying) |
     | `JWT_SECRET` | Yes | Backend JWT signing secret — use a long random string; compose refuses to start without it |
     | `INTERNAL_API_TOKEN` | Yes | Shared secret the backend sends to the model server as `X-Internal-Token`; the model server rejects requests without it and won't start when unset |
-    | `CORS_ORIGIN` | No | Comma-separated extra allowed CORS origins (e.g. a deployed frontend URL) |
-    | `API_CONNECT_SRC` | No | API *origin* (`scheme://host[:port]`, no `/api` path) allowed by the frontend's CSP `connect-src` — rendered into the nginx config at container start, defaults to `http://localhost:3001`. Set it to the origin of the API the browser calls, matching the `VITE_API_URL` build arg |
+    | `CORS_ORIGIN` | No | Comma-separated extra allowed CORS origins — only needed for a frontend that bypasses the bundled nginx's same-origin `/api` proxy and calls the backend cross-origin |
 
 2. **Build and start everything**:
 
