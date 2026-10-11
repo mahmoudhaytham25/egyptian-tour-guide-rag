@@ -18,12 +18,19 @@ class RetrievalError(Exception):
     ungrounded answer built on an empty context."""
 
 
+def is_past(deadline):
+    """True when the caller-supplied monotonic deadline has passed —
+    the boolean form of check_deadline for optional-work decisions.
+    None means no budget, so never past."""
+    return deadline is not None and time.monotonic() >= deadline
+
+
 def check_deadline(deadline):
     """Hard stop before another API attempt on a blown budget.
 
     deadline is a time.monotonic() value, or None for no budget.
     """
-    if deadline is not None and time.monotonic() >= deadline:
+    if is_past(deadline):
         raise DeadlineExceeded("time budget exhausted")
 
 

@@ -1,11 +1,15 @@
 // src/App.jsx
+import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Chat from './pages/Chat';
-import Documents from './pages/Documents';
 import Login from './components/Auth/Login'
 import Signup from './components/Auth/Register'
 import RequireAuth from './components/Auth/RequireAuth';
 import './App.css';
+
+// The authenticated pages pull in the whole chat/documents stack — split
+// them out of the initial bundle so the login screen stays light.
+const Chat = lazy(() => import('./pages/Chat'));
+const Documents = lazy(() => import('./pages/Documents'));
 
 function App() {
   return (
@@ -19,7 +23,9 @@ function App() {
             path="/chat"
             element={
               <RequireAuth>
-                <Chat />
+                <Suspense fallback={null}>
+                  <Chat />
+                </Suspense>
               </RequireAuth>
             }
           />
@@ -28,7 +34,9 @@ function App() {
             path="/documents"
             element={
               <RequireAuth>
-                <Documents />
+                <Suspense fallback={null}>
+                  <Documents />
+                </Suspense>
               </RequireAuth>
             }
           />

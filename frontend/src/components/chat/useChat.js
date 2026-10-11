@@ -2,7 +2,8 @@
 // The components stay purely presentational; everything stateful lives here.
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import api from "../../services/api";
+import api, { AUTH_TOKEN_KEY, conversationKey } from "../../services/api";
+import apiError from "../../utils/apiError";
 import { logout } from "../../utils/logout";
 import {
   BACKGROUND_IMAGE_RULES,
@@ -139,7 +140,7 @@ const useChat = () => {
             // Commit the id only after the fetch proves the conversation
             // is alive — a dead id committed here would 404 every send.
             setActiveConversationId(latest._id);
-            localStorage.setItem(`conversationId_${uid}`, latest._id);
+            localStorage.setItem(conversationKey(uid), latest._id);
             if (data && Array.isArray(data.messages)) {
               setMessages(data.messages.map(formatConversationMessage));
             }
@@ -219,7 +220,7 @@ const useChat = () => {
   // the axios response interceptor clears state on a 401.
   useEffect(() => {
     const handleStorageChange = (e) => {
-      if (e.key === "authToken" && !e.newValue) {
+      if (e.key === AUTH_TOKEN_KEY && !e.newValue) {
         invalidatePendingWork();
         setMessages([]);
         setConversations([]);
@@ -258,7 +259,7 @@ const useChat = () => {
   const getActiveConversationId = useCallback(() => {
     return (
       activeConversationIdRef.current ||
-      (userId ? localStorage.getItem(`conversationId_${userId}`) : null)
+      (userId ? localStorage.getItem(conversationKey(userId)) : null)
     );
   }, [userId]);
 
@@ -285,7 +286,7 @@ const useChat = () => {
           setActiveConversationId(newConversation._id);
           if (userId) {
             localStorage.setItem(
-              `conversationId_${userId}`,
+              conversationKey(userId),
               newConversation._id
             );
           }
@@ -361,7 +362,7 @@ const useChat = () => {
         setMessages(formattedMessages);
         setActiveConversationId(conversation._id);
         if (userId) {
-          localStorage.setItem(`conversationId_${userId}`, conversation._id);
+          localStorage.setItem(conversationKey(userId), conversation._id);
         }
       } catch {
         if (seq !== selectSeqRef.current) return;
@@ -388,7 +389,7 @@ const useChat = () => {
     setIsLoadingHistory(false);
     setActiveConversationId(null);
     if (userId) {
-      localStorage.removeItem(`conversationId_${userId}`);
+      localStorage.removeItem(conversationKey(userId));
     }
     localStorage.removeItem("conversationId"); // legacy key cleanup
     inputRef.current?.focus();
@@ -513,13 +514,13 @@ const useChat = () => {
           conversationFeaturesAvailable &&
           !conversationRecovered &&
           (activeConversationIdRef.current ||
-            (userId && localStorage.getItem(`conversationId_${userId}`)))
+            (userId && localStorage.getItem(conversationKey(userId))))
         ) {
           conversationRecovered = true;
           setActiveConversationId(null);
           activeConversationIdRef.current = null;
           if (userId) {
-            localStorage.removeItem(`conversationId_${userId}`);
+            localStorage.removeItem(conversationKey(userId));
           }
           try {
             const retryResponse = await askWithConversation(trimmed);
@@ -532,7 +533,7 @@ const useChat = () => {
               ...prev,
               makeLocalMessage(
                 "error",
-                retryError.response?.data?.message || GENERIC_ERROR_MESSAGE
+                apiError(retryError, GENERIC_ERROR_MESSAGE)
               ),
             ]);
             setLoading(false);
@@ -567,7 +568,7 @@ const useChat = () => {
               ...prev,
               makeLocalMessage(
                 "error",
-                retryError.response?.data?.message || GENERIC_ERROR_MESSAGE
+                apiError(retryError, GENERIC_ERROR_MESSAGE)
               ),
             ]);
             setLoading(false);
@@ -579,7 +580,7 @@ const useChat = () => {
           ...prev,
           makeLocalMessage(
             "error",
-            error.response?.data?.message || GENERIC_ERROR_MESSAGE
+            apiError(error, GENERIC_ERROR_MESSAGE)
           ),
         ]);
         setLoading(false);
@@ -656,8 +657,6 @@ const useChat = () => {
     [handleSend]
   );
 
-  const handleLogout = logout;
-
   return {
     // state
     messages,
@@ -682,7 +681,7 @@ const useChat = () => {
     sendQuestion,
     handleSend,
     handleKeyPress,
-    handleLogout,
+    handleLogout: logout,
     handleSelectConversation,
     handleNewChat,
     handleDeleteConversation,

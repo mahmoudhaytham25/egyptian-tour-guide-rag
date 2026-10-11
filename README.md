@@ -91,7 +91,7 @@ push to main → tests → diff paths → CodeBuild builds changed images → EC
 
 - GitHub Actions authenticates via **OIDC** — no AWS keys stored in secrets
 - `JWT_SECRET` is generated into **Secrets Manager**; the box renders `.env` at boot — plaintext secrets never enter templates or state
-- `docker-compose.prod.yml` mirrors the dev stack but pulls images instead of building
+- `docker-compose.base.yml` holds the shared stack (env, volumes, healthchecks); `docker-compose.yml` (dev — builds images, publishes dev ports) and `docker-compose.prod.yml` (prod — pulls ECR images) `include` it as thin overlays, so the usual `docker compose up` / `-f docker-compose.prod.yml` commands keep working
 - The CI `deploy` job skips cleanly until the three GitHub entries are set — no AWS account needed to keep CI green
 
 Full design, deploy steps and cost notes: [infrastructure/README.md](infrastructure/README.md)

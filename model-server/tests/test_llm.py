@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from models.llm import LLMModel, EmptyResponseError, MAX_RETRIES
+from models.llm import LLMModel, EmptyResponseError, MAX_RETRIES, _fallback_models
 from rag.errors import DeadlineExceeded
 
 
@@ -104,21 +104,17 @@ class TestFallbackChain:
 
     def test_every_tier_rate_limited_raises_after_retries(self, monkeypatch):
         monkeypatch.setattr(time, "sleep", lambda s: None)
-        script = {
-            name: FakeAPIError(429)
-            for name in [
-                "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
-                "gemini-3.5-flash", "gemini-3.5-flash-lite",
-                "gemini-3.1-flash-lite", "gemini-3-flash-preview",
-                "gemini-2.5-flash", "gemini-2.5-flash-lite",
-            ]
-        }
+        # Build the chain from the source of truth so edits to the
+        # fallback list don't desync the test.
+        chain = ["gemini-3.8-flash"] + [
+            m for m in _fallback_models() if m != "gemini-3.8-flash"]
+        script = {name: FakeAPIError(429) for name in chain}
         model, api = make_model(script)
         with pytest.raises(FakeAPIError):
             model.generate("p")
         # Each tier is tried once; the last tier exhausts MAX_RETRIES.
         assert api.calls[:-MAX_RETRIES] == list(script.keys())[:-1]
-        assert api.calls[-MAX_RETRIES:] == ["gemini-2.5-flash-lite"] * MAX_RETRIES
+        assert api.calls[-MAX_RETRIES:] == [chain[-1]] * MAX_RETRIES
 
     def test_env_override_replaces_chain(self, monkeypatch):
         monkeypatch.setenv(

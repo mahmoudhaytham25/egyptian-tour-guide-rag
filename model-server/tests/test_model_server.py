@@ -71,6 +71,8 @@ except ImportError:
 google.genai = _fake_genai
 
 import model_server
+import rag.utils.file_utils as file_utils
+from rag.errors import check_deadline, is_past
 
 AUTH = {"X-Internal-Token": "test-internal-token"}
 
@@ -145,7 +147,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(model_server, "generator", fake_generator)
     monkeypatch.setattr(model_server, "embedding_model", FakeEmbeddingModel())
     monkeypatch.setattr(model_server, "get_data_dir", lambda: str(data_dir))
-    monkeypatch.setattr(model_server, "get_vector_store_dir", lambda: str(vector_store_dir))
+    # vector_store_paths resolves get_vector_store_dir inside file_utils —
+    # patch it there so both _document_is_indexed and Retriever
+    # construction see the tmp store.
+    monkeypatch.setattr(file_utils, "get_vector_store_dir", lambda: str(vector_store_dir))
 
     with model_server.retrievers_lock:
         model_server.retrievers.clear()
@@ -170,6 +175,13 @@ def touch_vectors(vector_store_dir, name):
     """Create vector-store files so a document counts as indexed."""
     (vector_store_dir / f"{name}_vectors.npz").write_bytes(b"")
     (vector_store_dir / f"{name}_metadata.json").write_text("[]")
+
+
+@pytest.fixture
+def indexed_default_doc(client):
+    """The default document exists on disk — most /query tests need it."""
+    touch_vectors(client.vector_store_dir, "egyptian_history")
+    return client
 
 
 def wait_for_status(client, expected, timeout=5.0):
@@ -296,8 +308,7 @@ class TestIndexAsync:
         assert resp.status_code == 202
         wait_for_status(client, "done")
 
-    def test_evicts_only_the_indexed_document(self, client, monkeypatch):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_evicts_only_the_indexed_document(self, client, monkeypatch, indexed_default_doc):
         touch_vectors(client.vector_store_dir, "other_doc")
 
         # Populate the retriever cache for both documents
@@ -319,8 +330,7 @@ class TestIndexAsync:
 
 
 class TestQuery:
-    def test_success_shape(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_success_shape(self, client, indexed_default_doc):
         resp = client.post("/query", json={"query": "Tell me about pyramids"}, headers=AUTH)
         assert resp.status_code == 200
         body = resp.get_json()
@@ -328,8 +338,7 @@ class TestQuery:
         assert body["query"] == "Tell me about pyramids"
         assert body["response"] == client.fake_generator.response
 
-    def test_default_document_uses_default_retriever(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_default_document_uses_default_retriever(self, client, indexed_default_doc):
         client.post("/query", json={"query": "q"}, headers=AUTH)
         call = client.fake_generator.calls[0]
         assert call["retriever"].pdf_name == "egyptian_history"
@@ -361,8 +370,7 @@ class TestQuery:
         resp = client.post("/query", json={"query": "q", "document": "../x"}, headers=AUTH)
         assert resp.status_code == 400
 
-    def test_generation_failure_returns_success_false(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_generation_failure_returns_success_false(self, client, indexed_default_doc):
         client.fake_generator.error = RuntimeError("LLM exploded")
         resp = client.post("/query", json={"query": "q"}, headers=AUTH)
         assert resp.status_code == 500
@@ -370,10 +378,9 @@ class TestQuery:
         assert body["success"] is False
         assert body["error"]
 
-    def test_retrieval_error_returns_success_false(self, client):
+    def test_retrieval_error_returns_success_false(self, client, indexed_default_doc):
         # A broken store / dead embedding API is an error, not an
         # answer — the backend maps this to a 502 and persists nothing.
-        touch_vectors(client.vector_store_dir, "egyptian_history")
         client.fake_generator.error = model_server.RetrievalError(
             "vector store could not be loaded")
         resp = client.post("/query", json={"query": "q"}, headers=AUTH)
@@ -382,16 +389,11 @@ class TestQuery:
         assert body["success"] is False
         assert "vector store" in body["error"]
 
-    def test_corrupt_store_errors_instead_of_empty_context_answer(self, client):
-        # touch_vectors leaves an empty .npz — it passes the
-        # _document_is_indexed precheck but a real retriever can't load
-        # it. Previously that silently produced an ungrounded
-        # success:true answer; now the RetrievalError must surface.
-        # The retriever's file attrs are pointed at tmp_path directly —
-        # it resolves its store dir at construction from rag.retriever's
-        # own get_vector_store_dir, which the client fixture doesn't patch.
-        touch_vectors(client.vector_store_dir, "egyptian_history")
-
+    def test_corrupt_store_errors_instead_of_empty_context_answer(self, client, indexed_default_doc):
+        # The fixture's empty .npz passes the _document_is_indexed
+        # precheck but a real retriever can't load it. Previously that
+        # silently produced an ungrounded success:true answer; now the
+        # RetrievalError must surface.
         retriever = model_server.Retriever(
             "egyptian_history", model_server.TIMES_NAME)
         retriever.vector_file = str(
@@ -412,8 +414,7 @@ class TestQuery:
         assert body["success"] is False
         assert body["error"]
 
-    def test_chat_history_sanitized(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_chat_history_sanitized(self, client, indexed_default_doc):
         resp = client.post("/query", json={
             "query": "q",
             "chat_history": [
@@ -432,8 +433,7 @@ class TestQuery:
             {"role": "assistant", "content": "second"},
         ]
 
-    def test_chat_history_non_list_rejected(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_chat_history_non_list_rejected(self, client, indexed_default_doc):
         resp = client.post(
             "/query", json={"query": "q", "chat_history": "notalist"}, headers=AUTH
         )
@@ -447,8 +447,7 @@ class TestQuery:
         resp = client.post("/query", json={"query": "q", "top_k": 99}, headers=AUTH)
         assert resp.status_code == 400
 
-    def test_timeout_ms_forwarded_as_monotonic_deadline(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_timeout_ms_forwarded_as_monotonic_deadline(self, client, indexed_default_doc):
         before = time.monotonic()
         resp = client.post("/query", json={"query": "q", "timeout_ms": 5000},
                            headers=AUTH)
@@ -457,22 +456,19 @@ class TestQuery:
         deadline = client.fake_generator.calls[0]["deadline"]
         assert before + 5 <= deadline <= after + 5
 
-    def test_no_timeout_ms_means_no_deadline(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_no_timeout_ms_means_no_deadline(self, client, indexed_default_doc):
         resp = client.post("/query", json={"query": "q"}, headers=AUTH)
         assert resp.status_code == 200
         assert client.fake_generator.calls[0]["deadline"] is None
 
-    def test_timeout_ms_invalid_rejected(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_timeout_ms_invalid_rejected(self, client, indexed_default_doc):
         for bad in (0, -5, "5000", True, 99999999):
             resp = client.post(
                 "/query", json={"query": "q", "timeout_ms": bad}, headers=AUTH)
             assert resp.status_code == 400, bad
         assert client.fake_generator.calls == []
 
-    def test_deadline_exceeded_returns_504(self, client):
-        touch_vectors(client.vector_store_dir, "egyptian_history")
+    def test_deadline_exceeded_returns_504(self, client, indexed_default_doc):
         client.fake_generator.error = model_server.DeadlineExceeded(
             "budget blown")
         resp = client.post("/query", json={"query": "q"}, headers=AUTH)
@@ -481,14 +477,13 @@ class TestQuery:
         assert body["success"] is False
         assert "budget" in body["error"]
 
-    def test_generator_deadline_helpers(self):
-        # __new__ skips __init__ so no models are constructed — the helpers
-        # are pure deadline math.
-        g = model_server.Generator.__new__(model_server.Generator)
-        assert not g._over_deadline(None)
-        g._check_deadline(time.monotonic() + 60)  # future — no raise
+    def test_deadline_helpers(self):
+        # The helpers live in rag.errors — shared with the model retry
+        # loops; the generator calls them directly now.
+        assert not is_past(None)
+        check_deadline(time.monotonic() + 60)  # future — no raise
         with pytest.raises(model_server.DeadlineExceeded):
-            g._check_deadline(time.monotonic() - 1)
+            check_deadline(time.monotonic() - 1)
 
     def test_schedule_keyword_route(self):
         g = model_server.Generator.__new__(model_server.Generator)

@@ -1,6 +1,7 @@
 // src/components/DocumentUploader.jsx
 import { useRef, useState } from 'react';
 import api from '../services/api';
+import apiError from '../utils/apiError';
 
 const DocumentUploader = ({ onDocumentUploaded }) => {
   const [file, setFile] = useState(null);
@@ -41,7 +42,7 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
         onDocumentUploaded();
       }
     } catch (error) {
-      setMessage(`Error: ${error.response?.data?.message || 'Failed to upload document'}`);
+      setMessage(`Error: ${apiError(error, 'Failed to upload document')}`);
     } finally {
       setUploading(false);
       setFile(null);

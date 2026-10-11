@@ -1,5 +1,6 @@
 import axios from "axios";
 import api from "./api";
+import { makeJwt, pastExp, futureExp } from "../test/helpers";
 
 // api.js calls axios.create(...) at module load and registers interceptors on
 // the returned instance — the hoisted mock lets the tests drive that instance
@@ -37,24 +38,12 @@ const responseSuccessInterceptor =
 const responseErrorInterceptor =
   axiosInstance.interceptors.response.use.mock.calls[0][1];
 
-const makeJwt = (payload) => {
-  const segment = btoa(JSON.stringify(payload))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  return `header.${segment}.signature`;
-};
-
-const futureExp = () => Math.floor(Date.now() / 1000) + 3600;
-const pastExp = () => Math.floor(Date.now() / 1000) - 3600;
-
 // jsdom's window.location is non-configurable, so spying on `assign` fails —
 // stub the whole location object instead (vitest's global is configurable).
 const locationStub = { assign: vi.fn(), pathname: "/" };
 
 describe("api service", () => {
   beforeEach(() => {
-    localStorage.clear();
     // Don't clear interceptors.use — its call history is the only record of
     // the handlers registered at module load.
     axiosInstance.get.mockReset();

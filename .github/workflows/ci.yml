@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Shared mongo DSN for every job that talks to the service container.
+env:
+  MONGODB_URI: mongodb://localhost:27017/egyptian_history_rag
+
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
@@ -29,7 +33,7 @@ jobs:
   backend-migrations:
     runs-on: ubuntu-latest
     services:
-      mongo:
+      mongo: &mongo-service
         image: mongo:7
         ports:
           - 27017:27017
@@ -50,8 +54,6 @@ jobs:
         run: npm ci
       - name: Verify migrations apply, roll back, and re-apply
         working-directory: backend
-        env:
-          MONGODB_URI: mongodb://localhost:27017/egyptian_history_rag
         run: |
           npx migrate-mongo up
           npx migrate-mongo down
@@ -166,15 +168,7 @@ jobs:
   frontend-e2e:
     runs-on: ubuntu-latest
     services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ping:1})' --quiet"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      mongo: *mongo-service
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -189,8 +183,6 @@ jobs:
         run: npm ci
       - name: Apply migrations
         working-directory: backend
-        env:
-          MONGODB_URI: mongodb://localhost:27017/egyptian_history_rag
         run: npx migrate-mongo up
       # The e2e suite never reaches the Flask model server (it needs a real
       # GEMINI_API_KEY), but server.js still requires MODEL_SERVER_URL and
@@ -200,7 +192,6 @@ jobs:
         working-directory: backend
         run: >
           env JWT_SECRET=e2e-secret
-          MONGODB_URI=mongodb://localhost:27017/egyptian_history_rag
           MODEL_SERVER_URL=http://localhost:5050
           INTERNAL_API_TOKEN=e2e-token
           CORS_ORIGIN=http://localhost:4173

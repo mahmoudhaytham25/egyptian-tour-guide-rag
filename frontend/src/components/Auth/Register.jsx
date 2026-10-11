@@ -1,10 +1,10 @@
 // src/components/auth/Register.jsx
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import "./Auth.css";
 import AuthCard from "./AuthCard";
-import authError from "./authError";
+import apiError from "../../utils/apiError";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -26,6 +26,11 @@ const Register = () => {
     : passwordsMatch
       ? "is-valid"
       : "is-invalid";
+
+  // Already signed in — a valid session shouldn't see the register page.
+  if (API.isAuthenticated()) {
+    return <Navigate to="/chat" replace />;
+  }
 
   /* main submit */
   const handleSubmit = async (e) => {
@@ -63,7 +68,7 @@ const Register = () => {
          so there is nothing else to provision — go straight to chat. */
       navigate("/chat");
     } catch (err) {
-      setErrorMessage(authError(err, "Registration failed. Please try again."));
+      setErrorMessage(apiError(err, "Registration failed. Please try again."));
     } finally {
       setSubmitting(false);
     }

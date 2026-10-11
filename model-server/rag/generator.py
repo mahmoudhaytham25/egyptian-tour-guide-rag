@@ -1,21 +1,21 @@
 import os
 import sys
-import time
 import logging
 import json
 import argparse
 from typing import List, Dict
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if __name__ == "__main__":
+    # Standalone run — Python puts this file's directory on sys.path, not
+    # the project root, so the package imports below need it added here.
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from models.llm import LLMModel
-from rag.errors import DeadlineExceeded
+from rag.constants import DEFAULT_DOCUMENT, TIMES_NAME
+from rag.errors import DeadlineExceeded, check_deadline, is_past
 from rag.retriever import Retriever
-from rag.utils import get_data_dir
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -38,8 +38,8 @@ class Generator:
             pdf_name (str): Name of the PDF file (without extension)
             times_name (str): Name of the times/schedule data file (without extension)
         """
-        self.pdf_name = pdf_name or "egyptian_history"
-        self.times_name = times_name or "monument_data"
+        self.pdf_name = pdf_name or DEFAULT_DOCUMENT
+        self.times_name = times_name or TIMES_NAME
         self.llm = LLMModel()
         self.retriever = Retriever(self.pdf_name, self.times_name)
 
@@ -187,7 +187,7 @@ class Generator:
 
             # Last hard deadline check before the expensive call — the
             # retrieval path does the same ahead of its final generate.
-            self._check_deadline(deadline)
+            check_deadline(deadline)
             schedule_response = self.llm.generate(
                 schedule_prompt, max_tokens= max_tokens, deadline=deadline)
             logger.info(f"Schedule response from LLM:\n{schedule_response}")
@@ -251,16 +251,6 @@ Respond with a comprehensive answer:
         return prompt
 
     
-    def _over_deadline(self, deadline):
-        """True when the caller-supplied monotonic deadline has passed."""
-        return deadline is not None and time.monotonic() >= deadline
-
-    def _check_deadline(self, deadline):
-        """Hard stop before issuing another LLM call on a blown budget."""
-        if self._over_deadline(deadline):
-            raise DeadlineExceeded(
-                "time budget exhausted before answer generation")
-
     def generate_response(self, query, top_k=10, chat_history=None, retriever=None, deadline=None):
         """
         Generate a response using the RAG pipeline with chat history and query enhancement.
@@ -304,17 +294,17 @@ Respond with a comprehensive answer:
             # optional pass is skipped on a blown budget so the raw
             # query can still retrieve and answer inside it.
             original_query = query
-            if chat_history and len(selected_history) > 0 and not self._over_deadline(deadline):
-                query = self.enhance_query_with_context(original_query, selected_history, self.llm, deadline=deadline)
+            if chat_history and len(selected_history) > 0 and not is_past(deadline):
+                query = self.enhance_query_with_context(original_query, selected_history, deadline=deadline)
                 logger.info(f"Enhanced query: '{original_query}' → '{query}'")
 
             # Itinerary-style asks take the schedule path (keyword route —
             # the old LLM intent classifier cost a full Gemini call just to
             # pick a branch).
             if self._is_schedule_query(query):
-                self._check_deadline(deadline)
+                check_deadline(deadline)
                 params = self.get_schedule_parameters(query, deadline=deadline)
-                self._check_deadline(deadline)
+                check_deadline(deadline)
 
                 return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history, retriever = retriever, deadline = deadline)
 
@@ -342,7 +332,7 @@ Respond with a comprehensive answer:
 
             # Generate response using the enhanced prompt — last hard
             # deadline check before the expensive call.
-            self._check_deadline(deadline)
+            check_deadline(deadline)
             answer = self.llm.generate(enhanced_prompt, deadline=deadline)
 
             # Extract sources from retrieved documents for citation
@@ -366,14 +356,13 @@ Respond with a comprehensive answer:
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
             raise
 
-    def enhance_query_with_context(self, query, chat_history, llm, deadline=None):
+    def enhance_query_with_context(self, query, chat_history, deadline=None):
         """
         Enhance queries with contextual information from chat history.
 
         Args:
             query (str): Current user query
             chat_history (list): List of previous messages with role and content
-            llm: LLM instance for query enhancement
             deadline: Optional time.monotonic() deadline — forwarded into
                 generate()'s retry loop
 
@@ -430,7 +419,7 @@ Respond with a comprehensive answer:
         # whole request.
         try:
             # A ≤200-char rewrite doesn't need the 4096-token default
-            enhanced_query = llm.generate(
+            enhanced_query = self.llm.generate(
                 enhancement_prompt, max_tokens=256, deadline=deadline).strip()
         except DeadlineExceeded:
             # Cancellation, not an enhancement failure — propagate.

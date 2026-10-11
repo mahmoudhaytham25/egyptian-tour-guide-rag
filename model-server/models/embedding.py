@@ -1,23 +1,22 @@
 import os
 import sys
-import time
 import logging
 import numpy as np
 from tqdm import tqdm
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if __name__ == "__main__":
+    # Standalone run — Python puts this file's directory on sys.path, not
+    # the project root, so the package imports below need it added here.
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from models.gemini import (
     configure_gemini,
-    is_rate_limit_error,
     is_retryable_error,
-    RATE_LIMIT_WAIT_SECONDS,
+    retry_sleep,
 )
-from rag.errors import DeadlineExceeded, check_deadline, cap_wait
+from rag.errors import DeadlineExceeded, check_deadline
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Gemini embedding model — served remotely, no local model download.
@@ -46,7 +45,7 @@ EMBED_TIMEOUT_SECONDS = 60
 
 
 class EmbeddingModel:
-    def __init__(self, model_name=DEFAULT_MODEL_NAME, model_path=None):
+    def __init__(self, model_name=DEFAULT_MODEL_NAME):
         """
         Initialize the embedding model.
 
@@ -55,8 +54,6 @@ class EmbeddingModel:
 
         Args:
             model_name (str): Gemini embedding model to use
-            model_path (str): Unused — kept for backward compatibility with
-                the old local-model signature
         """
         self.model_name = model_name
         self.model_loaded = False
@@ -130,14 +127,9 @@ class EmbeddingModel:
                     raise
                 # Per-minute quota exhaustion needs a long wait, not jitter —
                 # regular transient errors keep the short exponential backoff.
-                wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
-                wait = cap_wait(wait, deadline)
-                logger.warning(
-                    f"Embedding request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
-                    f"retrying in {wait:.0f}s"
-                )
-                time.sleep(wait)
-                delay *= 2
+                delay = retry_sleep(
+                    e, delay, deadline, logger,
+                    f"Embedding request failed (attempt {attempt}/{MAX_RETRIES})")
 
     @staticmethod
     def _normalize(embeddings):

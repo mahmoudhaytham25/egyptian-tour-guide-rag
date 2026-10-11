@@ -26,6 +26,12 @@ def get_times_dir():
     ensure_directory(times_dir)
     return times_dir
 
-def chunk_list(lst, batch_size):
-    """Split a list into chunks of specified size."""
-    return [lst[i:i + batch_size] for i in range(0, len(lst), batch_size)]
+def vector_store_paths(name):
+    """Return the (vectors .npz, metadata .json) path pair for a
+    document name under the vector store directory — the single place
+    the file naming scheme lives."""
+    vector_dir = get_vector_store_dir()
+    return (
+        os.path.join(vector_dir, f"{name}_vectors.npz"),
+        os.path.join(vector_dir, f"{name}_metadata.json"),
+    )

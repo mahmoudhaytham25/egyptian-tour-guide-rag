@@ -18,7 +18,7 @@ const app = buildApp();
 beforeEach(() => {
   jest.clearAllMocks();
   // Default: authenticated user exists
-  mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+  mockAuthUser();
   Conversation.find.mockReturnValue(sortedLimited([]));
 });
 

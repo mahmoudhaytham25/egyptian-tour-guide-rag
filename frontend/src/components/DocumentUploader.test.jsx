@@ -1,17 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import DocumentUploader from "./DocumentUploader";
 import api from "../services/api";
+import { flushPromises } from "../test/helpers";
 
 vi.mock("../services/api", () => ({
   default: {
     uploadDocument: vi.fn(),
   },
 }));
-
-const flushPromises = () =>
-  act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
 
 const selectFile = (file) => {
   const input = document.querySelector('input[type="file"]');

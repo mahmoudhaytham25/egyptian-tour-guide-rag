@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import DocumentManager from "./DocumentManager";
 import api from "../services/api";
+import { flushPromises } from "../test/helpers";
 
 vi.mock("../services/api", () => ({
   default: {
@@ -9,11 +10,6 @@ vi.mock("../services/api", () => ({
     indexDocument: vi.fn(),
   },
 }));
-
-const flushPromises = () =>
-  act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
 
 const DOCS = [
   {

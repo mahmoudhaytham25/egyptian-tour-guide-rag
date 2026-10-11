@@ -23,7 +23,7 @@ const OTHER_CONV_ID = '64b7f0f4c2a1d3e5f6071830';
 beforeEach(() => {
   jest.clearAllMocks();
   // Auth middleware: resolve the Bearer token to this user (req.userId = 'user-1')
-  mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+  mockAuthUser();
   Conversation.updateOne.mockResolvedValue({});
   // getConversation queries messages in parallel with the conversation
   // lookup — the chain must exist even when the conversation 404s.

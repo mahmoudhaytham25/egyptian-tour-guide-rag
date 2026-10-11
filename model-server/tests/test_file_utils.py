@@ -4,7 +4,6 @@ Tests for rag/utils/file_utils.py — pure stdlib module, no heavy deps.
 import os
 
 from rag.utils.file_utils import (
-    chunk_list,
     ensure_directory,
     get_data_dir,
     get_project_root,
@@ -28,23 +27,6 @@ class TestProjectPaths:
         vector_dir = get_vector_store_dir()
         assert os.path.isdir(vector_dir)
         assert vector_dir == os.path.join(get_project_root(), "vector_store")
-
-
-class TestChunkList:
-    def test_even_split(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 3) == [[1, 2, 3], [4, 5, 6]]
-
-    def test_remainder_chunk(self):
-        assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
-
-    def test_batch_larger_than_list(self):
-        assert chunk_list([1, 2], 10) == [[1, 2]]
-
-    def test_empty_list(self):
-        assert chunk_list([], 3) == []
-
-    def test_batch_size_one(self):
-        assert chunk_list(["a", "b", "c"], 1) == [["a"], ["b"], ["c"]]
 
 
 class TestEnsureDirectory:

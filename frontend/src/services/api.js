@@ -3,7 +3,10 @@ import axios from "axios";
 // Vite inlines VITE_* env vars at build time; fall back to the local default.
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
 
-const AUTH_TOKEN_KEY = "authToken";
+export const AUTH_TOKEN_KEY = "authToken";
+
+// Per-user localStorage slot remembering the last-opened conversation.
+export const conversationKey = (userId) => `conversationId_${userId}`;
 
 // Clear the token plus every chat-related key this app (and older builds of
 // it) may have left behind in localStorage.

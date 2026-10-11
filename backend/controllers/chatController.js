@@ -129,12 +129,12 @@ exports.getConversation = async (req, res) => {
 exports.addMessage = async (req, res) => {
   assertValidConversationId(req.params.id);
 
-  const { role, content } = req.body || {};
+  const { role, content, metadata } = req.body || {};
   if (!VALID_ROLES.includes(role)) {
     throw new HttpError(400, `Role must be one of: ${VALID_ROLES.join(', ')}`);
   }
   validateContent(content);
-  const metadata = sanitizeMetadata((req.body || {}).metadata);
+  const sanitizedMetadata = sanitizeMetadata(metadata);
 
   const conversation = await findOwnedConversation(req.params.id, req.userId);
 
@@ -143,16 +143,18 @@ exports.addMessage = async (req, res) => {
     conversationId: conversation._id,
     role,
     content,
-    metadata
+    metadata: sanitizedMetadata
   });
-  await message.save();
 
-  // Bump the conversation timestamp only — updateOne skips the pre-save
-  // hook, so the $set is explicit.
-  await Conversation.updateOne(
-    { _id: conversation._id },
-    { $set: { updatedAt: new Date() } }
-  );
+  // The message save and the conversation timestamp bump are independent —
+  // updateOne skips the pre-save hook, so the $set is explicit.
+  await Promise.all([
+    message.save(),
+    Conversation.updateOne(
+      { _id: conversation._id },
+      { $set: { updatedAt: new Date() } }
+    )
+  ]);
 
   res.status(201).json(message);
 };
@@ -161,10 +163,12 @@ exports.addMessage = async (req, res) => {
 exports.updateConversation = async (req, res) => {
   assertValidConversationId(req.params.id);
   const title = (req.body || {}).title;
-  validateTitle(title);
-  if (typeof title !== 'string' || !title.trim()) {
+  // Unlike create, a title is required on update — but validateTitle already
+  // covers empty/blank/over-long values, so only the missing case is extra.
+  if (title === undefined) {
     throw new HttpError(400, 'A non-empty title is required');
   }
+  validateTitle(title);
 
   const conversation = await findOwnedConversation(req.params.id, req.userId);
 
@@ -190,9 +194,12 @@ exports.hardDeleteConversation = async (req, res) => {
   assertValidConversationId(req.params.id);
   const conversation = await findOwnedConversation(req.params.id, req.userId);
 
-  // Delete all associated messages, then the conversation itself
-  await Message.deleteMany({ conversationId: conversation._id });
-  await Conversation.deleteOne({ _id: conversation._id });
+  // Delete all associated messages and the conversation itself — the two
+  // deletes are independent and can run together.
+  await Promise.all([
+    Message.deleteMany({ conversationId: conversation._id }),
+    Conversation.deleteOne({ _id: conversation._id })
+  ]);
 
   res.status(200).json({ message: 'Conversation permanently deleted' });
 };

@@ -27,9 +27,9 @@ module.exports = async (req, res, next) => {
       throw new HttpError(401, 'User not found');
     }
 
-    // Attach only the fields downstream code needs — never the full document
-    // (which would carry the password hash around the request lifecycle).
-    req.user = { id: user._id, email: user.email };
+    // Attach only what downstream code needs (the user id) — never the
+    // full document (which would carry the password hash around the
+    // request lifecycle).
     req.userId = user._id;
 
     next();

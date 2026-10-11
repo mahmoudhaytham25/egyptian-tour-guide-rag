@@ -45,7 +45,7 @@ function sortedLimited(docs) {
  * Point the auth middleware's User.findById().select('email').lean() chain at
  * `user` (or null) — the middleware only hydrates the email field.
  */
-function mockAuthUser(user) {
+function mockAuthUser(user = { _id: 'user-1', email: 'a@b.com' }) {
   const User = require('../models/user');
   User.findById.mockReturnValue({
     select: jest.fn().mockReturnValue({
@@ -54,4 +54,4 @@ function mockAuthUser(user) {
   });
 }
 
-module.exports = { buildApp, signToken, authHeader, sortedLimited, mockAuthUser, TEST_USER_ID };
+module.exports = { buildApp, authHeader, sortedLimited, mockAuthUser };

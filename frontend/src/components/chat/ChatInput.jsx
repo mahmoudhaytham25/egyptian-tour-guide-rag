@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 
 const MAX_TEXTAREA_HEIGHT = 132; // ~5 lines before the field starts scrolling
 
@@ -65,4 +65,4 @@ const ChatInput = ({ value, onChange, onKeyDown, onSend, disabled, inputRef }) =
   );
 };
 
-export default ChatInput;
+export default memo(ChatInput);

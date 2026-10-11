@@ -7,5 +7,3 @@ export const logout = () => {
   api.logout();
   window.location.assign("/");
 };
-
-export default logout;

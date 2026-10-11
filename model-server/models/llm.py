@@ -1,21 +1,14 @@
 import os
-import sys
-import time
 import logging
-
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.gemini import (
     configure_gemini,
     is_rate_limit_error,
     is_retryable_error,
-    RATE_LIMIT_WAIT_SECONDS,
+    retry_sleep,
 )
-from rag.errors import check_deadline, cap_wait
+from rag.errors import check_deadline
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Per-request timeout (seconds) for Gemini generate_content calls, so a hung
@@ -219,12 +212,7 @@ class LLMModel:
                         raise
                     # Per-minute quota exhaustion needs a long wait, not jitter —
                     # regular transient errors keep the short exponential backoff.
-                    wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
-                    wait = cap_wait(wait, deadline)
-                    logger.warning(
-                        f"LLM request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
-                        f"retrying in {wait:.0f}s"
-                    )
-                    time.sleep(wait)
-                    delay *= 2
+                    delay = retry_sleep(
+                        e, delay, deadline, logger,
+                        f"LLM request failed (attempt {attempt}/{MAX_RETRIES})")
         raise last_error

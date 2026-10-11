@@ -2,20 +2,22 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import ChatInterface from "./ChatInterface";
 import api from "../services/api";
+import { flushPromises } from "../test/helpers";
 
 vi.mock("../services/api", () => ({
+  // Named exports useChat reads alongside the default api object.
+  AUTH_TOKEN_KEY: "authToken",
+  conversationKey: (userId) => `conversationId_${userId}`,
   default: {
     getUserId: vi.fn(),
     getConversations: vi.fn(),
     getConversation: vi.fn(),
     createConversation: vi.fn(),
-    addMessageToConversation: vi.fn(),
     deleteConversation: vi.fn(),
     askQuestion: vi.fn(),
     getDocuments: vi.fn(),
     logout: vi.fn(),
     isAuthenticated: vi.fn(),
-    getAuthToken: vi.fn(),
     setAuthToken: vi.fn(),
   },
 }));
@@ -78,13 +80,6 @@ const DOCUMENTS = [
   },
 ];
 
-// Flush the promise chains inside the component's async handlers without
-// touching (fake) timers — needed between a UI action and its awaited result.
-const flushPromises = () =>
-  act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
-
 const typeQuestion = (text) => {
   fireEvent.change(screen.getByPlaceholderText("Type your message..."), {
     target: { value: text },
@@ -111,7 +106,6 @@ const renderChat = () =>
 
 describe("ChatInterface", () => {
   beforeEach(() => {
-    localStorage.clear();
     vi.clearAllMocks();
     api.getUserId.mockReturnValue(USER_ID);
     api.getConversations.mockResolvedValue([]);

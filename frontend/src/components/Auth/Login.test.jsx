@@ -30,7 +30,6 @@ const renderLogin = () =>
 
 describe("Login", () => {
   beforeEach(() => {
-    localStorage.clear();
     vi.clearAllMocks();
     // clearAllMocks doesn't reset mockReturnValue — re-default the guard.
     api.isAuthenticated.mockReturnValue(false);

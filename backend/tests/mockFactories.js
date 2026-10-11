@@ -29,7 +29,6 @@ function makeConversationModel() {
   }));
   MockConversation.find = jest.fn();
   MockConversation.findOne = jest.fn();
-  MockConversation.findById = jest.fn();
   MockConversation.updateOne = jest.fn();
   MockConversation.deleteOne = jest.fn();
   return MockConversation;

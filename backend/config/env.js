@@ -18,4 +18,4 @@ function validateEnv() {
   }
 }
 
-module.exports = { validateEnv, REQUIRED_ENV_VARS };
+module.exports = { validateEnv };

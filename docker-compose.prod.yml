@@ -5,81 +5,25 @@
 #
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# Same layout as docker-compose.yml — mongo and the model server are
-# internal-only, nginx proxies /api to the backend, so port 3000 is the
-# only public surface. Unlike dev, the backend's :3001 is NOT published.
+# Shared service definitions (env, volumes, healthchecks, depends_on, named
+# volumes) live in docker-compose.base.yml — `include`d below, so the
+# single -f invocation above keeps working. Same layout as dev — mongo and
+# the model server are internal-only, nginx proxies /api to the backend,
+# so APP_PORT is the only public surface. Unlike dev, neither mongo's
+# :27017 nor the backend's :3001 is published.
+
+include:
+  - docker-compose.base.yml
 
 services:
-  mongo:
-    image: mongo:7
-    restart: unless-stopped
-    volumes:
-      - mongo-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   model-server:
     image: ${ECR_REGISTRY}/${ECR_MODEL_SERVER_REPO}:${IMAGE_TAG}
-    restart: unless-stopped
-    environment:
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
-    volumes:
-      - rag-data:/app/data
-      - vector-store:/app/vector_store
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5050/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
 
   backend:
     image: ${ECR_REGISTRY}/${ECR_BACKEND_REPO}:${IMAGE_TAG}
     init: true
-    restart: unless-stopped
-    depends_on:
-      mongo:
-        condition: service_healthy
-      model-server:
-        condition: service_healthy
-    environment:
-      PORT: 3001
-      NODE_ENV: production
-      MONGODB_URI: mongodb://mongo:27017/egyptian_history_rag
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
-      MODEL_SERVER_URL: http://model-server:5050
-      CORS_ORIGIN: ${CORS_ORIGIN:-}
-    volumes:
-      - rag-data:/model-server/data
-      - vector-store:/model-server/vector_store
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
 
   frontend:
     image: ${ECR_REGISTRY}/${ECR_FRONTEND_REPO}:${IMAGE_TAG}
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
     ports:
       - "${APP_PORT:-3000}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-
-volumes:
-  mongo-data:
-  rag-data:
-  vector-store:

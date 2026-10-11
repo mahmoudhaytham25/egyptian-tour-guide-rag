@@ -189,7 +189,7 @@ describe('POST /api/auth/login', () => {
 
 describe('GET /api/auth/verify/:token — removed', () => {
   test('authenticated → 404', async () => {
-    mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+    mockAuthUser();
     const token = jwt.sign({ id: 'user-1' }, process.env.JWT_SECRET);
     const res = await request(app)
       .get(`/api/auth/verify/${token}`)

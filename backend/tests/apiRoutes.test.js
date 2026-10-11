@@ -3,8 +3,8 @@
  *
  * Mocked: mongoose models (User/Conversation/Message) and the model-server
  * axios instance (config/modelServer — all calls to the Flask model server).
- * fs.existsSync is spied on per-test to simulate uploaded PDFs in the shared
- * data directory.
+ * fs.promises.access is spied on per-test to simulate uploaded PDFs in the
+ * shared data directory.
  */
 const fs = require('fs');
 const path = require('path');
@@ -39,7 +39,7 @@ beforeEach(() => {
   modelServer.get.mockReset();
   // Default: the model server reports no indexing job running.
   modelServer.get.mockResolvedValue({ data: { status: 'idle' } });
-  mockAuthUser({ _id: 'user-1', email: 'a@b.com' });
+  mockAuthUser();
 });
 
 afterEach(() => {
@@ -47,12 +47,14 @@ afterEach(() => {
 });
 
 /**
- * Make fs.existsSync answer `true` only for the given filenames inside the
- * model-server data dir (simulating uploaded PDFs).
+ * Make the controller's existence check answer `true` only for the given
+ * filenames inside the model-server data dir (simulating uploaded PDFs).
  */
 function mockDataFiles(...names) {
-  jest.spyOn(fs, 'existsSync').mockImplementation((p) =>
+  jest.spyOn(fs.promises, 'access').mockImplementation((p) =>
     names.some((n) => String(p).endsWith(n))
+      ? Promise.resolve()
+      : Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
   );
 }
 
@@ -540,12 +542,14 @@ describe('POST /api/query', () => {
 describe('GET /api/documents', () => {
   test('response includes filenames/sizes but never absolute paths', async () => {
     mockDataFiles('data', 'vector_store', 'doc_vectors.npz'); // dirs + index artifacts "exist"
-    jest.spyOn(fs, 'readdirSync').mockImplementation((dir) =>
-      String(dir).includes('vector_store')
-        ? ['doc_metadata.json', 'lonely_metadata.json']
-        : ['doc.pdf', 'lonely.pdf']
+    jest.spyOn(fs.promises, 'readdir').mockImplementation((dir) =>
+      Promise.resolve(
+        String(dir).includes('vector_store')
+          ? ['doc_metadata.json', 'lonely_metadata.json']
+          : ['doc.pdf', 'lonely.pdf']
+      )
     );
-    jest.spyOn(fs, 'statSync').mockReturnValue({
+    jest.spyOn(fs.promises, 'stat').mockResolvedValue({
       mtime: new Date('2025-01-01T00:00:00Z'),
       size: 1234
     });

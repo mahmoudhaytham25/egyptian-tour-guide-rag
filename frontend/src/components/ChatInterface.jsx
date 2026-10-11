@@ -1,4 +1,5 @@
 import HistoryDisplay from "./HistoryDisplay";
+import ThemedBackdrop from "./ThemedBackdrop";
 import useChat from "./chat/useChat";
 import ChatHeader from "./chat/ChatHeader";
 import MessageList from "./chat/MessageList";
@@ -12,12 +13,7 @@ const ChatInterface = () => {
 
   return (
     <>
-      <img
-        src={chat.backgroundImage}
-        alt=""
-        className={`imgCover ${chat.fade ? "fade-out" : ""}`}
-      />
-      <div className="bg-overlay" aria-hidden="true" />
+      <ThemedBackdrop src={chat.backgroundImage} fade={chat.fade} />
 
       <div className="chat-layout">
         <HistoryDisplay

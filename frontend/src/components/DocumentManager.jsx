@@ -1,6 +1,7 @@
 // src/components/DocumentManager.jsx
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import api from '../services/api';
+import apiError from '../utils/apiError';
 
 const DocumentManager = () => {
   const [documents, setDocuments] = useState([]);
@@ -24,6 +25,14 @@ const DocumentManager = () => {
       statusTimeoutRef.current = null;
       setStatusMessage('');
     }, 3000);
+  }, []);
+
+  // Stop the status-polling interval and forget which file was in flight;
+  // an optional message updates the status line in the same step.
+  const stopPolling = useCallback((message) => {
+    if (message) setStatusMessage(message);
+    setPollingActive(false);
+    setIndexingFile(null);
   }, []);
 
   const fetchDocuments = useCallback(async () => {
@@ -67,18 +76,14 @@ const DocumentManager = () => {
         const status = response.status;
 
         if (!status) {
-          setStatusMessage('Error checking indexing status');
-          setPollingActive(false);
-          setIndexingFile(null);
+          stopPolling('Error checking indexing status');
           return;
         }
 
         if (status.error) {
           // Indexing failed — stop polling instead of polling forever
-          setStatusMessage(`Indexing failed: ${status.error}`);
+          stopPolling(`Indexing failed: ${status.error}`);
           await fetchDocuments();
-          setPollingActive(false);
-          setIndexingFile(null);
           return;
         }
 
@@ -92,26 +97,21 @@ const DocumentManager = () => {
           // keep the completion message visible briefly via clearStatusSoon
           // (each poll would otherwise reschedule the clear forever).
           await fetchDocuments();
-          setStatusMessage(`Indexing completed at ${new Date(status.lastIndexed).toLocaleTimeString()}`);
-          setPollingActive(false);
-          setIndexingFile(null);
+          stopPolling(`Indexing completed at ${new Date(status.lastIndexed).toLocaleTimeString()}`);
           clearStatusSoon();
         } else {
           // Not indexing and nothing indexed — nothing left to poll for
-          setPollingActive(false);
-          setIndexingFile(null);
+          stopPolling();
         }
       } catch (error) {
         console.error('Error polling status:', error);
-        setStatusMessage('Error checking indexing status');
-        setPollingActive(false);
-        setIndexingFile(null);
+        stopPolling('Error checking indexing status');
       }
     }, 2000);
 
     // Clean up interval on unmount or when polling stops
     return () => clearInterval(interval);
-  }, [pollingActive, fetchDocuments]);
+  }, [pollingActive, fetchDocuments, stopPolling, clearStatusSoon]);
 
   // Clear the deferred status-cleanup timeout on unmount.
   useEffect(() => {
@@ -154,11 +154,21 @@ const DocumentManager = () => {
       pollIndexingStatus();
     } catch (error) {
       console.error('Error indexing document:', error);
-      setMessage(`Error: ${error.response?.data?.message || 'Failed to start indexing'}`);
+      setMessage(`Error: ${apiError(error, 'Failed to start indexing')}`);
       setIndexingStatus(prev => ({ ...prev, [filename]: 'failed' }));
       setIndexingFile(null);
     }
   };
+
+  // The two sections render disjoint halves of the same list — split it
+  // once instead of filtering it four times per render.
+  const [unindexed, indexed] = useMemo(
+    () => [
+      documents.filter((doc) => !doc.indexed),
+      documents.filter((doc) => doc.indexed),
+    ],
+    [documents]
+  );
 
   if (loading && documents.length === 0) {
     return <div className="document-manager"><p className="dm-hint">Loading documents...</p></div>;
@@ -174,12 +184,11 @@ const DocumentManager = () => {
       <div className="document-sections">
         <div className="document-section">
           <h4>Uploaded Documents (Not Indexed)</h4>
-          {documents.filter(doc => !doc.indexed).length === 0 ? (
+          {unindexed.length === 0 ? (
             <p className="dm-hint">No unindexed documents available.</p>
           ) : (
             <ul className="documents-list">
-              {documents
-                .filter(doc => !doc.indexed)
+              {unindexed
                 .map((doc) => (
                   <li key={doc.filename} className="document-item">
                     <span className="document-name">
@@ -204,12 +213,11 @@ const DocumentManager = () => {
 
         <div className="document-section">
           <h4>Indexed Documents</h4>
-          {documents.filter(doc => doc.indexed).length === 0 ? (
+          {indexed.length === 0 ? (
             <p className="dm-hint">No indexed documents available.</p>
           ) : (
             <ul className="documents-list">
-              {documents
-                .filter(doc => doc.indexed)
+              {indexed
                 .map((doc) => (
                   <li key={doc.filename} className="document-item indexed">
                     <span className="document-name">

@@ -1,17 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import RequireAuth from "./RequireAuth";
-
-const makeJwt = (payload) => {
-  const segment = btoa(JSON.stringify(payload))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  return `header.${segment}.signature`;
-};
-
-const futureExp = () => Math.floor(Date.now() / 1000) + 3600;
-const pastExp = () => Math.floor(Date.now() / 1000) - 3600;
+import { makeJwt, futureExp, pastExp } from "../../test/helpers";
 
 // Uses the real api service (localStorage-backed) so the guard is exercised
 // end to end, including the stale-token cleanup on the way out.
@@ -33,10 +23,6 @@ const renderGuarded = () =>
   );
 
 describe("RequireAuth", () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
   it("redirects to / when there is no token", () => {
     renderGuarded();
     expect(screen.getByText("Login Page")).toBeInTheDocument();

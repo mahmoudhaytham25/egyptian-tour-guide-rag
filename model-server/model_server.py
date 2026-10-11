@@ -4,15 +4,17 @@ import time
 import uuid
 import logging
 import threading
+from collections import OrderedDict
 from flask import Flask, request, jsonify
 
 from models.embedding import EmbeddingModel
 from models.llm import LLMModel
 from rag.retriever import Retriever
-from rag.generator import Generator, DeadlineExceeded
-from rag.errors import RetrievalError
+from rag.generator import Generator
+from rag.constants import DEFAULT_DOCUMENT, TIMES_NAME
+from rag.errors import DeadlineExceeded, RetrievalError
 from rag.indexer import PDFIndexer
-from rag.utils import get_data_dir, get_vector_store_dir
+from rag.utils import get_data_dir, vector_store_paths
 from rag.utils.env_loader import load_environment, get_api_key
 
 # Configure logging
@@ -41,12 +43,13 @@ embedding_model = None
 llm_model = None
 generator = None
 
-# Per-document retrievers, constructed lazily on first use and cached.
-# Indexing a document evicts ONLY that document's retriever — other
-# documents keep their warm caches.
-DEFAULT_DOCUMENT = "egyptian_history"
-TIMES_NAME = "monument_data"
-retrievers = {}
+# Per-document retrievers, constructed lazily on first use and cached as
+# a bounded LRU — each entry can hold a document's full embedding matrix,
+# so at most MAX_CACHED_RETRIEVERS stay warm and inserting past the cap
+# evicts the least recently used. Indexing a document evicts ONLY that
+# document's retriever — other documents keep their warm caches.
+MAX_CACHED_RETRIEVERS = 12
+retrievers = OrderedDict()
 retrievers_lock = threading.Lock()
 
 # Guards against concurrent indexing runs. NOTE: this lock is process-local,
@@ -72,6 +75,16 @@ MAX_CHAT_HISTORY_ENTRIES = 20
 MAX_TIMEOUT_MS = 540000
 
 
+def _err(message, status, **extra):
+    """Build an error response tuple — each call site keeps its existing
+    body shape ({"error": ...} plus any success/job_id/filename extras
+    the backend contract already carries); this only removes the
+    jsonify/status boilerplate."""
+    body = {"error": message}
+    body.update(extra)
+    return jsonify(body), status
+
+
 @app.before_request
 def require_internal_token():
     """Require the shared-secret X-Internal-Token header on every route.
@@ -84,18 +97,26 @@ def require_internal_token():
         return None
     token = request.headers.get("X-Internal-Token", "")
     if not hmac.compare_digest(token.encode("utf-8"), INTERNAL_API_TOKEN.encode("utf-8")):
-        return jsonify({"error": "unauthorized"}), 401
+        return _err("unauthorized", 401)
     return None
 
 
 def get_retriever(document):
-    """Return the retriever for a document, constructing it on first use."""
+    """Return the retriever for a document, constructing it on first use.
+
+    Cache hits move the entry to the most-recently-used end; inserts past
+    MAX_CACHED_RETRIEVERS evict the oldest entry.
+    """
     with retrievers_lock:
         retriever = retrievers.get(document)
         if retriever is None:
             retriever = Retriever(document, TIMES_NAME)
             retriever.embedding_model = embedding_model  # Share the already loaded model
             retrievers[document] = retriever
+            if len(retrievers) > MAX_CACHED_RETRIEVERS:
+                retrievers.popitem(last=False)
+        else:
+            retrievers.move_to_end(document)
         return retriever
 
 
@@ -108,11 +129,8 @@ def invalidate_retriever(document):
 
 def _document_is_indexed(document):
     """True when the document's vector store exists on disk."""
-    vector_store_dir = get_vector_store_dir()
-    return (
-        os.path.exists(os.path.join(vector_store_dir, f"{document}_vectors.npz"))
-        and os.path.exists(os.path.join(vector_store_dir, f"{document}_metadata.json"))
-    )
+    vector_file, metadata_file = vector_store_paths(document)
+    return os.path.exists(vector_file) and os.path.exists(metadata_file)
 
 
 def _update_index_job(**fields):
@@ -195,7 +213,7 @@ def health_check():
         "models_loaded": {
             "embedding_model": embedding_model is not None and embedding_model.model_loaded,
             "llm_model": llm_model is not None and llm_model.model_loaded,
-            "retriever": retrievers is not None,
+            "retriever": len(retrievers),
             "generator": generator is not None
         }
     })
@@ -208,22 +226,22 @@ def query():
         # shape as other validation failures instead of an HTML 400 page
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            return jsonify({"error": "JSON body is required"}), 400
+            return _err("JSON body is required", 400)
 
         query_text = data.get('query')
         if not isinstance(query_text, str) or not query_text.strip():
-            return jsonify({"error": "query must be a non-empty string"}), 400
+            return _err("query must be a non-empty string", 400)
         if len(query_text) > MAX_QUERY_LENGTH:
-            return jsonify({"error": f"query must be at most {MAX_QUERY_LENGTH} characters"}), 400
+            return _err(f"query must be at most {MAX_QUERY_LENGTH} characters", 400)
 
         top_k = data.get('top_k', 10)
         if (isinstance(top_k, bool) or not isinstance(top_k, int)
                 or not MIN_TOP_K <= top_k <= MAX_TOP_K):
-            return jsonify({"error": f"top_k must be an integer between {MIN_TOP_K} and {MAX_TOP_K}"}), 400
+            return _err(f"top_k must be an integer between {MIN_TOP_K} and {MAX_TOP_K}", 400)
 
         chat_history = data.get('chat_history', [])
         if not isinstance(chat_history, list):
-            return jsonify({"error": "chat_history must be a list"}), 400
+            return _err("chat_history must be a list", 400)
         # Drop malformed entries instead of failing the request — downstream
         # formatting assumes dicts with string role/content and would die on
         # a KeyError otherwise.
@@ -241,16 +259,15 @@ def query():
         # path), sanitized identically to /index filenames
         document = data.get('document') or DEFAULT_DOCUMENT
         if not isinstance(document, str):
-            return jsonify({"error": "document must be a string"}), 400
+            return _err("document must be a string", 400)
         safe_document = os.path.basename(document)
         if safe_document != document or not safe_document:
-            return jsonify({"error": "invalid document — only names of indexed PDFs are allowed"}), 400
+            return _err("invalid document — only names of indexed PDFs are allowed", 400)
 
         if not _document_is_indexed(safe_document):
-            return jsonify({
-                "success": False,
-                "error": f"unknown document '{safe_document}' — it has not been indexed"
-            }), 404
+            return _err(
+                f"unknown document '{safe_document}' — it has not been indexed",
+                404, success=False)
 
         # Cooperative cancellation: the backend may send its own remaining
         # budget (timeout_ms) so this server stops issuing Gemini calls
@@ -261,9 +278,9 @@ def query():
         if timeout_ms is not None:
             if (isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int)
                     or not 0 < timeout_ms <= MAX_TIMEOUT_MS):
-                return jsonify({
-                    "error": f"timeout_ms must be an integer between 1 and {MAX_TIMEOUT_MS}"
-                }), 400
+                return _err(
+                    f"timeout_ms must be an integer between 1 and {MAX_TIMEOUT_MS}",
+                    400)
             deadline = time.monotonic() + timeout_ms / 1000.0
 
         # Generate response with chat history against that document's
@@ -285,7 +302,7 @@ def query():
         # Budget blown between pipeline stages — a clean 504 (not a hang)
         # lets the backend tell this apart from an upstream timeout.
         logger.warning("Query aborted by caller time budget: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 504
+        return _err(str(e), 504, success=False)
     except RetrievalError as e:
         # The vector store is unreadable or the embedding API failed —
         # retrieval genuinely couldn't happen. success:false + 500 keeps
@@ -293,13 +310,13 @@ def query():
         # error to a 502) instead of an empty-context reply that reads
         # like a real one.
         logger.error("Retrieval failed: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return _err(str(e), 500, success=False)
     except Exception:
         # success:false + 5xx tells the backend NOT to persist an assistant
         # message — generation genuinely failed rather than producing a
         # user-facing answer.
         logger.exception("Error processing query")
-        return jsonify({"success": False, "error": "query failed"}), 500
+        return _err("query failed", 500, success=False)
 
 @app.route('/index', methods=['POST'])
 def index_document():
@@ -314,29 +331,28 @@ def index_document():
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "JSON body is required"}), 400
+        return _err("JSON body is required", 400)
 
     filename = data.get('filename')
     if not filename or not isinstance(filename, str):
-        return jsonify({"error": "filename is required"}), 400
+        return _err("filename is required", 400)
 
     # Sanitize: bare filenames only, must be a PDF (mirrors backend validation)
     safe_filename = os.path.basename(filename)
     if safe_filename != filename or not safe_filename.lower().endswith('.pdf'):
-        return jsonify({"error": "invalid filename — only PDF files in the data directory are allowed"}), 400
+        return _err("invalid filename — only PDF files in the data directory are allowed", 400)
 
     pdf_path = os.path.join(get_data_dir(), safe_filename)
     if not os.path.exists(pdf_path):
-        return jsonify({"error": "PDF file not found in data directory"}), 404
+        return _err("PDF file not found in data directory", 404)
 
     if not indexing_lock.acquire(blocking=False):
         with _index_job_lock:
             job = dict(_index_job)
-        return jsonify({
-            "error": "indexing already in progress",
-            "job_id": job.get("job_id"),
-            "filename": job.get("filename"),
-        }), 409
+        return _err(
+            "indexing already in progress", 409,
+            job_id=job.get("job_id"),
+            filename=job.get("filename"))
 
     job_id = uuid.uuid4().hex
     _update_index_job(status="indexing", job_id=job_id, filename=safe_filename, error=None)
@@ -354,7 +370,7 @@ def index_document():
         logger.exception(f"Failed to start indexing thread for {safe_filename}")
         indexing_lock.release()
         _update_index_job(status="error", error="failed to start indexing job")
-        return jsonify({"error": "failed to start indexing job"}), 500
+        return _err("failed to start indexing job", 500)
 
     logger.info(f"Indexing started for {filename} (job {job_id})")
     return jsonify({

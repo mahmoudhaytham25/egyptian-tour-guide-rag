@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Link } from "react-router-dom";
 import DocumentSelector from "./DocumentSelector";
 import icon from "../../Assets/Images/pharaoh-icon.png";
@@ -34,4 +35,4 @@ const ChatHeader = ({
   </header>
 );
 
-export default ChatHeader;
+export default memo(ChatHeader);

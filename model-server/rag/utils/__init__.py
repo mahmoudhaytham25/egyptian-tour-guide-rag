@@ -4,7 +4,7 @@ from .file_utils import (
     get_project_root,
     get_data_dir,
     get_vector_store_dir,
-    chunk_list,
+    vector_store_paths,
     get_times_dir
 )
 

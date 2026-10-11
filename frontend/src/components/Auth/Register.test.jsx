@@ -43,7 +43,6 @@ const submitForm = () => {
 
 describe("Register", () => {
   beforeEach(() => {
-    localStorage.clear();
     vi.clearAllMocks();
   });
 

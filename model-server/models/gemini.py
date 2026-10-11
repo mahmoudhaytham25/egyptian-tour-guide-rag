@@ -1,10 +1,7 @@
-import os
-import sys
+import time
 import threading
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+from rag.errors import cap_wait
 from rag.utils.env_loader import get_api_key
 
 # Per-minute quota exhaustion needs a long wait, not jitter — the Gemini
@@ -105,3 +102,22 @@ def is_retryable_error(error):
         "timeout", "timed out", "deadline",
     )
     return any(marker in message for marker in retryable_markers)
+
+
+def retry_sleep(error, delay, deadline, logger, label):
+    """Sleep before the next retry attempt and return the doubled backoff.
+
+    Per-minute quota exhaustion (429) waits out RATE_LIMIT_WAIT_SECONDS;
+    other transient errors use the caller's current exponential backoff.
+    The wait is capped at the time left before deadline so a blown budget
+    can't be slept through, and warn-logged under the caller's label
+    (e.g. "Embedding request failed (attempt 2/5)").
+
+    Returns:
+        float: The next backoff delay (delay * 2)
+    """
+    wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(error) else delay
+    wait = cap_wait(wait, deadline)
+    logger.warning(f"{label}: {str(error)[:200]} — retrying in {wait:.0f}s")
+    time.sleep(wait)
+    return delay * 2

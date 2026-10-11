@@ -142,7 +142,7 @@ The diagram shows:
 
 ## Running with Docker
 
-The full stack (frontend, backend, model server, MongoDB) is defined in `docker-compose.yml` at the repo root:
+The full stack (frontend, backend, model server, MongoDB) is defined in `docker-compose.base.yml` (shared definitions) plus the `docker-compose.yml` dev overlay at the repo root — plain `docker compose` commands pick both up via `include`:
 
 1. **Create the root `.env` file** (compose reads it automatically):
 
@@ -236,7 +236,9 @@ The main API will be available at `http://localhost:3001`
 | `/api/chat/conversations` | POST | Create new conversation | `{"title": "Egyptian Pyramids", "message": "Tell me about the Great Pyramid of Giza"}` |
 | `/api/chat/conversations` | GET | List all user conversations | N/A |
 | `/api/chat/conversations/{id}` | GET | Get specific conversation with messages | N/A |
+| `/api/chat/conversations/{id}` | PUT | Update conversation details (e.g. rename title) | `{"title": "New conversation title"}` |
 | `/api/chat/conversations/{id}/messages` | POST | Add message to conversation | `{"role": "user", "content": "Tell me more about Giza"}` |
+| `/api/chat/conversations/{id}` | DELETE | Soft-delete a conversation (hidden from lists) | N/A |
 | `/api/chat/conversations/{id}/permanent` | DELETE | Delete conversation permanently | N/A |
 
 ### RAG System API

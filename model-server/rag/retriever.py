@@ -1,23 +1,25 @@
 import os
 import sys
+import csv
 import logging
 import functools
 import numpy as np
 import json
-import pandas as pd
 import re
 import traceback
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if __name__ == "__main__":
+    # Standalone run — Python puts this file's directory on sys.path, not
+    # the project root, so the package imports below need it added here.
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from models.embedding import EmbeddingModel
+from rag.constants import TIMES_NAME
 from rag.errors import DeadlineExceeded, RetrievalError
-from rag.utils import get_vector_store_dir, get_times_dir
+from rag.utils import get_times_dir, vector_store_paths
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("retriever")
+logger = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=8)
@@ -28,33 +30,30 @@ def _load_times_records(times_file):
     once at load time instead of on every request.
     """
     records = []
-    for _, row in pd.read_csv(times_file).iterrows():
-        records.append({
-            "Location": re.sub(r'[^\w\s,:\-]', '', str(row.get("Location", ""))).strip(),
-            "Time": re.sub(r'[^\w\s,:;\-]', '', str(row.get("Opening Hours", ""))).strip(),
-        })
+    with open(times_file, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            records.append({
+                "Location": re.sub(r'[^\w\s,:\-]', '', str(row.get("Location") or "")).strip(),
+                "Time": re.sub(r'[^\w\s,:;\-]', '', str(row.get("Opening Hours") or "")).strip(),
+            })
     return records
 
 
 class Retriever:
-    def __init__(self, pdf_name, times_name=None, top_k=10):
+    def __init__(self, pdf_name, times_name=None):
         """
         Initialize the retriever.
 
         Args:
             pdf_name (str): Name of the PDF file (without extension)
             times_name (str): Name of the times/schedule data file (without extension)
-            top_k (int): Number of top results to retrieve
         """
         self.pdf_name = pdf_name
-        self.top_k = top_k
-        self.times_name = times_name or "monument_data"
+        self.times_name = times_name or TIMES_NAME
         self.embedding_model = EmbeddingModel()
-        self.vector_store_dir = get_vector_store_dir()
         self.times_dir = get_times_dir()
 
-        self.vector_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_vectors.npz")
-        self.metadata_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_metadata.json")
+        self.vector_file, self.metadata_file = vector_store_paths(self.pdf_name)
         self.times_file = os.path.join(self.times_dir, f"{self.times_name}.csv")
         
         self.embeddings = None
@@ -133,7 +132,7 @@ class Retriever:
 
         Args:
             query (str): Query text
-            top_k (int): Number of top results to retrieve (overrides instance value)
+            top_k (int): Number of top results to retrieve
             score_thresh (float): Minimum similarity score threshold
             deadline: Optional time.monotonic() deadline — forwarded into
                 the query embedding's retry loop
@@ -189,9 +188,20 @@ class Retriever:
 
             # Calculate similarity scores
             similarity_scores = np.dot(emb, query_embedding)
-            
-            # Get top k indices
-            top_indices = np.argsort(similarity_scores)[-top_k:][::-1]
+
+            # Get top k indices — argpartition selects the k candidates in
+            # O(n), then only those k are sorted; the result is the same
+            # descending-score order as a full argsort. k is clamped to the
+            # score count for the (warned) case where the embedding count
+            # is smaller than the metadata length; k == n skips the
+            # partition entirely (also covers an empty score array).
+            n = similarity_scores.shape[0]
+            k = min(top_k, n)
+            if k == n:
+                top_indices = np.arange(n)
+            else:
+                top_indices = np.argpartition(similarity_scores, n - k)[n - k:]
+            top_indices = top_indices[np.argsort(similarity_scores[top_indices])[::-1]]
             
             # Get top k chunks with scores
             results = []

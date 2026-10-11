@@ -3,7 +3,7 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import "./Auth.css";
 import AuthCard from "./AuthCard";
-import authError from "./authError";
+import apiError from "../../utils/apiError";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -27,7 +27,7 @@ const Login = () => {
       await API.login({ email, password });
       navigate("/chat");
     } catch (err) {
-      setError(authError(err, "Login failed. Please try again."));
+      setError(apiError(err, "Login failed. Please try again."));
     } finally {
       setSubmitting(false);
     }

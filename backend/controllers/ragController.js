@@ -5,8 +5,9 @@ const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Conversation = require('../models/conversation');
 const modelServer = require('../config/modelServer');
-const { HttpError } = require('../middleware/errors');
+const { HttpError, toModelServerHttpError } = require('../middleware/errors');
 const { DATA_DIR, VECTOR_STORE_DIR } = require('../config/paths');
+const { isSafeBasename } = require('../utils/pdfFilename');
 
 // The /query pipeline makes up to three serial Gemini calls (classify →
 // enhance → generate), which on a slow key observed ~150s — so a 2-minute
@@ -25,7 +26,10 @@ const MAX_QUERY_LENGTH = 2000;
 // Exported so server.js can keep requestTimeout comfortably above this.
 exports.QUERY_TIMEOUT_MS = QUERY_TIMEOUT_MS;
 const DEFAULT_DOCUMENT = 'egyptian_history';
-const SAFE_BASENAME_RE = /^(?=.*[A-Za-z0-9])[A-Za-z0-9._-]+$/;
+// Persisted/returned whenever the model server yields no usable answer —
+// never JSON.stringify a null upstream answer into the literal "null".
+const FALLBACK_ANSWER =
+  "I'm sorry, I couldn't generate a proper response. Please try again.";
 
 // Indexing status is process-global on purpose: this deployment runs a single
 // backend instance against a single model server, so one shared status object
@@ -41,16 +45,18 @@ let indexingStatus = {
   jobId: null
 };
 
-function safePdfFilename(filename) {
-  const base = path.basename(String(filename));
-  if (base !== filename || !SAFE_BASENAME_RE.test(base) ||
-      !base.toLowerCase().endsWith('.pdf')) {
-    return null;
+// Async equivalent of fs.existsSync — resolves false on any access error
+// (missing file, EACCES), matching existsSync semantics.
+async function pathExists(p) {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch (err) {
+    return false;
   }
-  return base;
 }
 
-exports.uploadPdf = (req, res) => {
+exports.uploadPdf = async (req, res) => {
   if (!req.file) {
     throw new HttpError(400, 'No file uploaded');
   }
@@ -75,9 +81,9 @@ exports.uploadPdf = (req, res) => {
   const vectorsPath = path.join(VECTOR_STORE_DIR, `${baseFileName}_vectors.npz`);
 
   for (const artifact of [metadataPath, vectorsPath]) {
-    if (fs.existsSync(artifact)) {
+    if (await pathExists(artifact)) {
       try {
-        fs.unlinkSync(artifact);
+        await fs.promises.unlink(artifact);
         console.log(`Deleted existing index artifact ${path.basename(artifact)} for ${baseFileName}`);
       } catch (err) {
         console.warn(`Warning: Could not delete index artifact ${artifact}:`, err.message);
@@ -108,13 +114,16 @@ exports.indexDocument = async (req, res) => {
   }
 
   // Sanitize filename to prevent path traversal and ensure it's a PDF
-  const safeFilename = safePdfFilename(filename);
+  const safeFilename =
+    isSafeBasename(filename) && filename.toLowerCase().endsWith('.pdf')
+      ? filename
+      : null;
   if (!safeFilename) {
     throw new HttpError(400, 'Invalid filename. Only PDF files in the data directory are allowed.');
   }
 
   const pdfPath = path.join(DATA_DIR, safeFilename);
-  if (!fs.existsSync(pdfPath)) {
+  if (!(await pathExists(pdfPath))) {
     throw new HttpError(404, `PDF file ${filename} not found. Please upload the file first.`);
   }
 
@@ -128,32 +137,16 @@ exports.indexDocument = async (req, res) => {
   } catch (error) {
     // Surface the model server's own client errors (400/404/409); anything
     // else is an upstream failure.
-    const detail =
-      (error.response && error.response.data &&
-        (error.response.data.error || error.response.data.message)) ||
-      error.message;
-    const status = error.response && error.response.status;
-    // Axios timeout (ECONNABORTED, no response) — same 504 mapping as /query;
-    // without this it would masquerade as a 502 "unreachable".
-    if (error.code === 'ECONNABORTED' ||
-        (error.message && error.message.toLowerCase().includes('timeout'))) {
-      throw new HttpError(504, 'Model server timed out accepting the indexing job');
-    }
-    if (status === 409) {
-      // A job is already running over there — reflect it locally.
+    const httpError = toModelServerHttpError(error, {
+      allowedClientStatuses: [400, 404, 409],
+      timeoutMessage: 'Model server timed out accepting the indexing job',
+      formatFailure: (detail) => `Indexing failed on model server: ${detail}`
+    });
+    // A job is already running over there — reflect it locally.
+    if (httpError.status === 409) {
       indexingStatus.isIndexing = true;
-      throw new HttpError(409, String(detail));
     }
-    // Only these client errors are safe to pass through — an upstream 401/403
-    // (bad INTERNAL_API_TOKEN) would read to the browser as the user's own
-    // session expiring and force a logout.
-    if (status === 400 || status === 404) {
-      throw new HttpError(status, String(detail));
-    }
-    if (!error.response) {
-      throw new HttpError(502, 'Model server is unreachable');
-    }
-    throw new HttpError(502, `Indexing failed on model server: ${detail}`);
+    throw httpError;
   }
 
   if (response.data && response.data.success === false) {
@@ -271,11 +264,10 @@ exports.queryRag = async (req, res) => {
     if (typeof body.document !== 'string' || body.document.length > 255) {
       throw new HttpError(400, 'Invalid document name');
     }
-    const doc = path.basename(body.document);
-    if (doc !== body.document || !SAFE_BASENAME_RE.test(doc)) {
+    if (!isSafeBasename(body.document)) {
       throw new HttpError(400, 'Invalid document name');
     }
-    documentName = doc.replace(/\.pdf$/i, '');
+    documentName = body.document.replace(/\.pdf$/i, '');
   }
 
   // Log the length, not the raw query text — questions may contain PII.
@@ -286,23 +278,28 @@ exports.queryRag = async (req, res) => {
   let conversation = null;
   let chatHistory = [];
   if (conversationId) {
+    // Intentionally a 404, not the 400 the chat routes return for a bad
+    // :id — /query doesn't distinguish a malformed id from a missing
+    // conversation (a malformed id can never match one anyway).
     if (!mongoose.isValidObjectId(conversationId)) {
       throw new HttpError(404, 'Conversation not found');
     }
-    const historyPromise = Promise.resolve()
-      .then(() => Message.find({ conversationId })
+    // Async IIFE so a synchronous failure building the query also lands in
+    // the catch — history is best-effort and must never 500 the query.
+    const historyPromise = (async () => {
+      const messages = await Message.find({ conversationId })
         .sort({ timestamp: -1 })
-        .limit(10))
-      .then((messages) =>
-        messages.slice().reverse().map((msg) => ({
-          role: msg.role,
-          content: msg.content
-        }))
-      )
-      .catch((error) => {
-        console.error('Error fetching chat history:', error.message);
-        return [];
-      });
+        .limit(10)
+        .select('role content -_id')
+        .lean();
+      return messages.slice().reverse().map((msg) => ({
+        role: msg.role,
+        content: msg.content
+      }));
+    })().catch((error) => {
+      console.error('Error fetching chat history:', error.message);
+      return [];
+    });
     [conversation, chatHistory] = await Promise.all([
       Conversation.findOne({ _id: conversationId, userId: req.userId, isActive: true }),
       historyPromise
@@ -328,23 +325,18 @@ exports.queryRag = async (req, res) => {
     rawData = modelResponse.data;
   } catch (error) {
     console.error('Model server /query failed:', error.message);
-
-    // Request timed out waiting for the model server
-    if (error.code === 'ECONNABORTED' ||
-        (error.message && error.message.toLowerCase().includes('timeout'))) {
-      throw new HttpError(504, 'Model server timed out while generating a response');
-    }
-    // Model server unreachable (connection refused, DNS failure, etc.)
-    if (!error.response) {
-      throw new HttpError(502, 'Model server is unreachable');
-    }
-    // Model server responded with an error status — surface its error
-    // message when it's a plain string field, never the raw body.
-    const detail = error.response.data && error.response.data.error;
-    // A 504 means it hit the cooperative time budget mid-pipeline —
-    // preserve the status rather than re-labeling it a bad gateway.
-    const status = error.response.status === 504 ? 504 : 502;
-    throw new HttpError(status, detail || 'Error generating response from model server');
+    throw toModelServerHttpError(error, {
+      // A 504 means it hit the cooperative time budget mid-pipeline —
+      // preserve the status rather than re-labeling it a bad gateway.
+      allowedClientStatuses: [504],
+      timeoutMessage: 'Model server timed out while generating a response',
+      // Surface the upstream `error` field only — never the raw body — and
+      // fall back to a generic message when it's absent.
+      getDetail: (err) =>
+        (err.response.data && err.response.data.error) ||
+        'Error generating response from model server',
+      formatFailure: (detail) => detail
+    });
   }
 
   // Generation failed upstream — return the error without persisting an
@@ -368,12 +360,12 @@ exports.queryRag = async (req, res) => {
     // into the literal string "null".
     plainTextAnswer = typeof response.answer === 'string' && response.answer.trim()
       ? response.answer
-      : "I'm sorry, I couldn't generate a proper response. Please try again.";
+      : FALLBACK_ANSWER;
     sources = response.sources || [];
     enhancedQuery = response.enhanced_query || null;
     originalQuery = response.original_query || null;
   } else {
-    plainTextAnswer = "I'm sorry, I couldn't generate a proper response. Please try again.";
+    plainTextAnswer = FALLBACK_ANSWER;
     console.warn('Unexpected model server response structure');
   }
 
@@ -391,18 +383,21 @@ exports.queryRag = async (req, res) => {
         Message.findOne({ conversationId, role: 'assistant' }).sort({ timestamp: -1 })
       ]);
 
+      // The two message inserts and the timestamp bump are independent
+      // writes — issue them together.
+      const writes = [];
       if (!lastUserMessage || lastUserMessage.content !== queryText) {
-        await Message.create({
+        writes.push(Message.create({
           conversationId,
           role: 'user',
           content: queryText
-        });
+        }));
       } else {
         console.log('Skipping duplicate user message (matches latest)');
       }
 
       if (!lastAssistantMessage || lastAssistantMessage.content !== plainTextAnswer) {
-        await Message.create({
+        writes.push(Message.create({
           conversationId,
           role: 'assistant',
           content: plainTextAnswer,
@@ -412,17 +407,18 @@ exports.queryRag = async (req, res) => {
             original_query: originalQuery,
             document: documentName
           }
-        });
+        }));
       } else {
         console.log('Skipping duplicate assistant message (matches latest)');
       }
 
       // Only the timestamp changed — updateOne avoids hydrating/saving the
       // doc; the explicit $set is needed because updateOne skips pre-save hooks.
-      await Conversation.updateOne(
+      writes.push(Conversation.updateOne(
         { _id: conversation._id },
         { $set: { updatedAt: new Date() } }
-      );
+      ));
+      await Promise.all(writes);
     } catch (error) {
       console.error('Error saving to conversation history:', error.message);
     }
@@ -441,39 +437,39 @@ exports.queryRag = async (req, res) => {
   });
 };
 
-exports.getDocuments = (req, res) => {
+exports.getDocuments = async (req, res) => {
   // Ensure data directory exists
-  if (!fs.existsSync(DATA_DIR)) {
+  if (!(await pathExists(DATA_DIR))) {
     return res.status(200).json({ documents: [] });
   }
 
   // Get all PDF files from data directory
-  const pdfFiles = fs.readdirSync(DATA_DIR)
+  const pdfFiles = (await fs.promises.readdir(DATA_DIR))
     .filter((file) => file.toLowerCase().endsWith('.pdf'));
 
   // A document counts as indexed only when BOTH index artifacts exist —
   // a metadata file without its vectors (or vice versa) is a broken index.
   const indexedDocsSet = new Set();
 
-  if (fs.existsSync(VECTOR_STORE_DIR)) {
-    const metadataBases = fs.readdirSync(VECTOR_STORE_DIR)
+  if (await pathExists(VECTOR_STORE_DIR)) {
+    const metadataBases = (await fs.promises.readdir(VECTOR_STORE_DIR))
       .filter((file) => file.endsWith('_metadata.json'))
       .map((file) => file.replace('_metadata.json', ''));
-    metadataBases.forEach((base) => {
-      if (fs.existsSync(path.join(VECTOR_STORE_DIR, `${base}_vectors.npz`))) {
+    await Promise.all(metadataBases.map(async (base) => {
+      if (await pathExists(path.join(VECTOR_STORE_DIR, `${base}_vectors.npz`))) {
         indexedDocsSet.add(base.toLowerCase());
       }
-    });
+    }));
   }
 
   // Map PDF files to document objects — filename/size only, never the
   // absolute server-side path. A file that disappears between readdir and
   // stat is skipped rather than 500ing the listing.
-  const documents = pdfFiles.map((file) => {
+  const documents = (await Promise.all(pdfFiles.map(async (file) => {
     const fileName = path.basename(file, path.extname(file));
     let stats;
     try {
-      stats = fs.statSync(path.join(DATA_DIR, file));
+      stats = await fs.promises.stat(path.join(DATA_DIR, file));
     } catch (err) {
       return null;
     }
@@ -486,7 +482,7 @@ exports.getDocuments = (req, res) => {
       indexed: indexedDocsSet.has(fileName.toLowerCase()),
       size: stats.size
     };
-  }).filter(Boolean);
+  }))).filter(Boolean);
 
   console.log(`Listed ${documents.length} documents (${indexedDocsSet.size} indexed)`);
 

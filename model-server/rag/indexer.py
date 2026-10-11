@@ -9,14 +9,15 @@ import numpy as np
 import json
 import uuid
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if __name__ == "__main__":
+    # Standalone run — Python puts this file's directory on sys.path, not
+    # the project root, so the package imports below need it added here.
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from models.embedding import EmbeddingModel
-from rag.utils import get_vector_store_dir
+from rag.utils import get_vector_store_dir, vector_store_paths
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class PDFIndexer:
@@ -43,8 +44,7 @@ class PDFIndexer:
         
         # Extract filename without extension for storing vectors
         self.pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        self.vector_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_vectors.npz")
-        self.metadata_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_metadata.json")
+        self.vector_file, self.metadata_file = vector_store_paths(self.pdf_name)
         
     def load_pdf(self):
         """

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { logout } from '../utils/logout';
 import DocumentUploader from '../components/DocumentUploader';
 import DocumentManager from '../components/DocumentManager';
+import ThemedBackdrop from '../components/ThemedBackdrop';
 import pyramids from '../Assets/Images/Pyramids.png';
 
 // Knowledge Base page (mounted at /documents): PDF upload + indexing that
@@ -18,8 +19,7 @@ const Documents = () => {
 
   return (
     <div className="documents-page">
-      <img src={pyramids} alt="" className="imgCover" />
-      <div className="bg-overlay" aria-hidden="true" />
+      <ThemedBackdrop src={pyramids} />
 
       <nav className="page-nav">
         <Link to="/chat" className="page-nav-back">← Back to chat</Link>
