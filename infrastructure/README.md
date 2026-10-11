@@ -1,7 +1,9 @@
 # Infrastructure — Egyptian Tour Guide RAG on AWS
 
 Minimal AWS CDK (TypeScript) app: **one EC2 instance** that pulls pre-built
-images from **ECR** and runs `docker compose -f docker-compose.prod.yml`.
+images from **ECR** and runs `docker compose -f docker-compose.yml` (the
+explicit `-f` keeps the committed `docker-compose.override.yml` dev
+overlay from auto-merging on the box).
 On every push to `main`, CI diffs the changed paths and triggers a
 **CodeBuild** build that clones the repo, builds+pushes images for the
 changed services (`backend/`, `frontend/`, `model-server/`), then redeploys

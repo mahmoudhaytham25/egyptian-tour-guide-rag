@@ -9,9 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Shared mongo DSN for every job that talks to the service container.
+# Shared mongo DSN for every job that talks to the service container —
+# auth included, matching the docker-compose stack.
 env:
-  MONGODB_URI: mongodb://localhost:27017/egyptian_history_rag
+  MONGODB_URI: mongodb://ci:ci-mongo-password@localhost:27017/egyptian_history_rag?authSource=admin
 
 jobs:
   backend-tests:
@@ -35,6 +36,11 @@ jobs:
     services:
       mongo: &mongo-service
         image: mongo:7
+        env:
+          # Auth-enabled, matching the compose stack — the workflow-level
+          # MONGODB_URI above carries the same pair.
+          MONGO_INITDB_ROOT_USERNAME: ci
+          MONGO_INITDB_ROOT_PASSWORD: ci-mongo-password
         ports:
           - 27017:27017
         options: >-
@@ -108,6 +114,7 @@ jobs:
       GEMINI_API_KEY: ci-dummy
       JWT_SECRET: ci-dummy-secret
       INTERNAL_API_TOKEN: ci-dummy-token
+      MONGO_INITDB_ROOT_PASSWORD: ci-dummy
     steps:
       - uses: actions/checkout@v7
       - name: Build all images

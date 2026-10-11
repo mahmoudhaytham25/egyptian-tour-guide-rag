@@ -56,6 +56,12 @@ for k in ("gemini_api_key", "internal_api_token", "jwt_secret"):
     print(f"{k.upper()}={shlex.quote(str(d.get(k, \"\")))}")
 ')"
 
+# Mongo root password — generated on-box. It's only ever consumed by the
+# mongo + backend containers over the internal network, so it lives
+# nowhere else (not even Secrets Manager): a machine-to-machine secret
+# no human needs to know or rotate.
+MONGO_ROOT_PASSWORD=$(openssl rand -hex 24)
+
 cat > .env <<ENV
 ECR_REGISTRY=${ECR_REGISTRY}
 ECR_BACKEND_REPO=${ECR_BACKEND_REPO}
@@ -66,14 +72,18 @@ IMAGE_TAG=${IMAGE_TAG}
 GEMINI_API_KEY=${GEMINI_API_KEY}
 JWT_SECRET=${JWT_SECRET}
 INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
+MONGO_INITDB_ROOT_USERNAME=ragroot
+MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
 ENV
 chmod 600 .env
 
 # First boot usually runs before any image exists — the deploy pipeline's
 # SSM command does the real pull+up once builds land. Don't fail bootstrap.
-docker compose -f docker-compose.prod.yml pull \
+# -f is load-bearing: it also disables the docker-compose.override.yml
+# dev overlay auto-load, keeping the box on the prod file alone.
+docker compose -f docker-compose.yml pull \
   || echo "ECR empty — the first deploy build will populate it"
-docker compose -f docker-compose.prod.yml up -d \
+docker compose -f docker-compose.yml up -d \
   || echo "stack not up yet — the deploy pipeline brings it up"
 
 echo "bootstrap done — app on :${APP_PORT}"

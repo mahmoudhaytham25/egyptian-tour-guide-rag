@@ -65,7 +65,7 @@ export class ComputeStack extends cdk.Stack {
     // (see README). The plaintext never enters the template or CDK state.
     const appSecret = new secretsmanager.Secret(this, 'AppSecrets', {
       secretName: `${name}/app`,
-      description: 'env vars for docker-compose.prod.yml (GEMINI_API_KEY / JWT_SECRET / INTERNAL_API_TOKEN)',
+      description: 'env vars for docker-compose.yml (GEMINI_API_KEY / JWT_SECRET / INTERNAL_API_TOKEN)',
       generateSecretString: {
         secretStringTemplate: JSON.stringify({
           gemini_api_key: 'REPLACE_ME',

@@ -65,9 +65,9 @@ phases:
           "cd %s",
           "git pull --ff-only",
           "aws ecr get-login-password --region %s | docker login --username AWS --password-stdin %s",
-          "docker compose -f docker-compose.prod.yml pull",
-          "docker compose -f docker-compose.prod.yml up -d",
-          "i=0; until curl -sf http://localhost:%s/api/health >/dev/null; do i=$((i+1)); if [ $i -ge 45 ]; then echo still-unhealthy; docker compose -f docker-compose.prod.yml logs --tail 40; exit 1; fi; sleep 2; done"
+          "docker compose -f docker-compose.yml pull",
+          "docker compose -f docker-compose.yml up -d",
+          "i=0; until curl -sf http://localhost:%s/api/health >/dev/null; do i=$((i+1)); if [ $i -ge 45 ]; then echo still-unhealthy; docker compose -f docker-compose.yml logs --tail 40; exit 1; fi; sleep 2; done"
         ]}' "$APP_DIR" "$APP_DIR" "$AWS_DEFAULT_REGION" "$ECR_REGISTRY" "$APP_PORT" | tr -d '\n')
         cmd=$(aws ssm send-command \
           --instance-ids "$INSTANCE_ID" \

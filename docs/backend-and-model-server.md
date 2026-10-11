@@ -113,7 +113,9 @@ The diagram shows:
 
     ```
     PORT=3001
-    MONGODB_URI=mongodb://localhost:27017/egyptian_history_rag
+    # credentialed when pointing at the compose mongo (auth-enabled);
+    # strip user:pass@ and ?authSource for a local unauthenticated mongod
+    MONGODB_URI=mongodb://ragroot:your_mongo_password@localhost:27017/egyptian_history_rag?authSource=admin
     JWT_SECRET=your_random_secure_jwt_secret
     MODEL_SERVER_URL=http://localhost:5050
     INTERNAL_API_TOKEN=your_random_shared_internal_token
@@ -142,7 +144,7 @@ The diagram shows:
 
 ## Running with Docker
 
-The full stack (frontend, backend, model server, MongoDB) is defined in `docker-compose.base.yml` (shared definitions) plus the `docker-compose.yml` dev overlay at the repo root — plain `docker compose` commands pick both up via `include`:
+The full stack (frontend, backend, model server, MongoDB) is defined in `docker-compose.yml` at the repo root — the hardened prod base — with `docker-compose.override.yml` auto-merging the dev deltas (build from source, published mongo/backend ports) on plain `docker compose` commands:
 
 1. **Create the root `.env` file** (compose reads it automatically):
 

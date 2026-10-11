@@ -15,7 +15,7 @@ everything else hits the real backend.
   ```bash
   cd backend
   JWT_SECRET=e2e-secret \
-  MONGODB_URI=mongodb://localhost:27017/egyptian_history_rag \
+  MONGODB_URI=mongodb://ragroot:your_mongo_password@localhost:27017/egyptian_history_rag?authSource=admin \
   MODEL_SERVER_URL=http://localhost:5050 \
   INTERNAL_API_TOKEN=e2e-token \
   CORS_ORIGIN=http://localhost:4173 \

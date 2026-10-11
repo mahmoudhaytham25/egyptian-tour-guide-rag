@@ -1,36 +1,134 @@
-# Egyptian Tour Guide RAG — dev compose: builds every service from source
-# and publishes the dev ports. Shared service definitions (env, volumes,
-# healthchecks, depends_on, named volumes) live in docker-compose.base.yml,
-# pulled in via `include` so plain `docker compose up --build` still works.
-# The explicit multi-file form is equivalent:
+# Egyptian Tour Guide RAG — Docker Compose. PRODUCTION BASE.
 #
-#   docker compose -f docker-compose.base.yml -f docker-compose.yml up --build
-
-include:
-  - docker-compose.base.yml
+# This default file is the hardened production stack: the app services
+# PULL pre-built images from ECR (built + pushed by the CI deploy pipeline)
+# and only the frontend is published — mongo, the model server and the
+# backend stay internal to the compose network; the frontend's nginx
+# proxies /api to the backend (see frontend/nginx.conf).
+#
+# LOCAL DEV: docker-compose.override.yml is auto-loaded on top and re-adds
+# the dev conveniences (build from source, published mongo/backend ports):
+#
+#   docker compose up --build
+#
+# PROD: pass this file explicitly — any -f disables the override auto-load:
+#
+#   docker compose -f docker-compose.yml pull
+#   docker compose -f docker-compose.yml up -d
+#
+# The EC2 bootstrap + CodeBuild deploy already invoke it this way; the
+# ECR_*/IMAGE_TAG/APP_PORT/secret vars are written into .env by the
+# bootstrap (see infrastructure/assets/user_data.sh). The ${VAR:-default}
+# fallbacks below only exist so a dev checkout produces valid local image
+# tags — the prod .env always supplies the real values.
 
 services:
   mongo:
-    # Bound to localhost only — the backend reaches mongo over the compose
-    # network; this mapping just enables local (non-docker) tooling.
-    ports:
-      - "127.0.0.1:27017:27017"
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      # Root user created on first boot of a FRESH mongo-data volume; every
+      # client (backend, local tooling) authenticates — no unauthenticated
+      # DB anywhere. Keep the password alphanumeric (or URL-encode it): it
+      # is interpolated into the backend's MONGODB_URI below.
+      # NOTE: a mongo-data volume created before auth existed boots with
+      # --auth but no users — wipe once with `docker compose down -v`.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-ragroot}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?MONGO_INITDB_ROOT_PASSWORD is required}
+    volumes:
+      - mongo-data:/data/db
+    # Not published in prod — internal to the compose network. The dev
+    # override adds a loopback mapping for local tooling.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1})"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   model-server:
-    build: ./model-server
+    image: ${ECR_REGISTRY:-localhost}/${ECR_MODEL_SERVER_REPO:-egyptian-tour-guide-rag-model-server}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      # Required: provide via a root .env file or the shell environment
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      # Shared secret the backend must send as X-Internal-Token
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
+      # NOTE: no HOST/PORT here — gunicorn's CMD hard-codes --bind
+      # 0.0.0.0:5050; those env vars are only read by the __main__ dev path.
+    volumes:
+      # Uploaded PDFs — shared with the backend (uploads land here).
+      # Seeded with the image's bundled data/egyptian_history.pdf on first run.
+      - rag-data:/app/data
+      # Generated index files (*_vectors.npz, *_metadata.json)
+      - vector-store:/app/vector_store
+    # Never published on the host — only the backend may reach it (auth-gated
+    # via X-Internal-Token).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5050/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   backend:
-    build: ./backend
-    ports:
-      - "3001:3001"
+    image: ${ECR_REGISTRY:-localhost}/${ECR_BACKEND_REPO:-egyptian-tour-guide-rag-backend}:${IMAGE_TAG:-latest}
+    init: true
+    restart: unless-stopped
+    # depends_on only orders startup; the backend's docker-entrypoint.sh
+    # additionally waits until mongo accepts connections, runs
+    # `migrate-mongo up` (DB migrations), then starts the server.
+    depends_on:
+      mongo:
+        condition: service_healthy
+      model-server:
+        condition: service_healthy
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+      # authSource=admin — the root user lives in the admin DB, not the app
+      # DB. The mongo service's :? guard above already fails up if unset.
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-ragroot}:${MONGO_INITDB_ROOT_PASSWORD}@mongo:27017/egyptian_history_rag?authSource=admin
+      # No fallback — a missing JWT_SECRET fails compose up front instead of
+      # silently signing tokens with a guessable key.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN is required}
+      MODEL_SERVER_URL: http://model-server:5050
+      # Comma-separated extra origins, e.g. a deployed frontend URL
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+    volumes:
+      # The backend resolves data/ and vector_store/ via ../model-server/
+      # relative to its own root (/app), i.e. /model-server/... — the named
+      # volumes keep them in sync with the model-server container.
+      - rag-data:/model-server/data
+      - vector-store:/model-server/vector_store
+    # Not published in prod — only the frontend's nginx proxies /api to it.
+    # The dev override publishes :3001 for local tooling.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   frontend:
-    build:
-      context: ./frontend
-      args:
-        # Baked into the static bundle at build time. "/api" = same-origin:
-        # the frontend's nginx proxies /api/* to the backend service (see
-        # frontend/nginx.conf), so the CSP needs no runtime configuration.
-        VITE_API_URL: /api
+    image: ${ECR_REGISTRY:-localhost}/${ECR_FRONTEND_REPO:-egyptian-tour-guide-rag-frontend}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    # The only public surface — nginx-unprivileged listens on 8080 (see
+    # frontend/nginx.conf) and reverse-proxies /api to the backend.
     ports:
-      - "3000:8080"
+      - "${APP_PORT:-3000}:8080"
+    # The alpine-based image ships busybox wget for the probe.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  mongo-data:
+  rag-data:
+  vector-store:
