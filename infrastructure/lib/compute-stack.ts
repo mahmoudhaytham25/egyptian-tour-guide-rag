@@ -75,21 +75,28 @@ export class ComputeStack extends cdk.Stack {
         excludePunctuation: true,
         passwordLength: 48,
       },
+      // Demo infra: `cdk destroy` should leave nothing billing behind.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     this.appSecret = appSecret;
 
     // --- instance role ------------------------------------------------------
-    // SSM for shell+deploy access without port 22, ECR read for image pulls,
-    // Secrets Manager read for the bootstrap .env render. No static keys on
-    // the box.
+    // SSM for shell+deploy access without port 22, ECR pull scoped to the
+    // three app repos (not account-wide read), Secrets Manager read for the
+    // bootstrap .env render. No static keys on the box.
     const role = new iam.Role(this, 'InstanceRole', {
       roleName: `${name}-instance`,
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'),
       ],
     });
+    // docker pull needs BatchCheckLayerAvailability + BatchGetImage +
+    // GetDownloadUrlForLayer (all repo-scoped) plus GetAuthorizationToken,
+    // which AWS only accepts on '*' — grantPull wires both halves.
+    for (const repo of Object.values(props.repositories)) {
+      repo.grantPull(role);
+    }
     appSecret.grantRead(role);
 
     // --- instance -----------------------------------------------------------
@@ -118,12 +125,14 @@ export class ComputeStack extends cdk.Stack {
       userDataCausesReplacement: true,
     });
 
-    // IMDSv2 only; hop=2 so the docker bridge doesn't eat the token's hop.
+    // IMDSv2 only; hop=1 keeps containers off IMDS entirely — nothing in a
+    // container needs instance creds (ECR pulls happen host-side via the
+    // docker daemon), so a compromised container can't reach them via SSRF.
     const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
     cfnInstance.metadataOptions = {
       httpTokens: 'required',
       httpEndpoint: 'enabled',
-      httpPutResponseHopLimit: 2,
+      httpPutResponseHopLimit: 1,
     };
 
     // --- user data ----------------------------------------------------------

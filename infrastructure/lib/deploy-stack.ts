@@ -16,13 +16,15 @@ export interface DeployStackProps extends cdk.StackProps {
   };
   repoUrl: string;
   instance: ec2.IInstance;
+  appPort: number;
 }
 
 // One parameterized build project. The GitHub Actions deploy job detects
 // which service directories changed in a push and starts this build with
 // CHANGED_SERVICES + IMAGE_TAG env overrides. The buildspec
 // (assets/buildspec.deploy.yml) clones the repo, builds+pushes each changed
-// image to ECR, then redeploys the EC2 box over SSM.
+// image to ECR, then redeploys the EC2 box over SSM — the box tracks the
+// :latest tag, which this build moves for every service it rebuilds.
 //
 // Source is NO_SOURCE + self-clone — no GitHub OAuth/CodeConnections needed;
 // the repo is public so the clone needs no credentials.
@@ -54,6 +56,7 @@ export class DeployStack extends cdk.Stack {
         ECR_BACKEND_REPO: { value: props.repositories.backend.repositoryName },
         ECR_FRONTEND_REPO: { value: props.repositories.frontend.repositoryName },
         ECR_MODEL_SERVER_REPO: { value: props.repositories.modelServer.repositoryName },
+        APP_PORT: { value: String(props.appPort) },
         INSTANCE_ID: { value: props.instance.instanceId },
       },
       timeout: cdk.Duration.minutes(45), // the model-server image is heavy

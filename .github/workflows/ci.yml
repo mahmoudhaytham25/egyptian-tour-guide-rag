@@ -306,6 +306,7 @@ jobs:
 
       - name: Trigger deploy build
         if: steps.changes.outputs.services != '' && steps.deploycfg.outputs.configured == 'true'
+        id: start
         run: |
           id=$(aws codebuild start-build \
             --project-name "${{ vars.CODEBUILD_PROJECT }}" \
@@ -313,11 +314,29 @@ jobs:
               name=CHANGED_SERVICES,value="${{ steps.changes.outputs.services }}" \
               name=IMAGE_TAG,value="$GITHUB_SHA" \
             --query 'build.id' --output text)
-          # Fire-and-forget: verdict lives on the build itself.
+          echo "build_id=$id" >> "$GITHUB_OUTPUT"
           {
             echo "deploy build started: \`$id\`"
             echo "[build history](https://${{ vars.AWS_REGION }}.console.aws.amazon.com/codesuite/codebuild/projects/${{ vars.CODEBUILD_PROJECT }}/history)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Poll the build so a red deploy shows up as a red check. Bounded by
+      # the CodeBuild project's 45-min timeout (plus slack) — a stuck build
+      # times out on the AWS side and this reports it.
+      - name: Wait for deploy build
+        if: steps.changes.outputs.services != '' && steps.deploycfg.outputs.configured == 'true'
+        env:
+          BUILD_ID: ${{ steps.start.outputs.build_id }}
+        run: |
+          for i in $(seq 1 150); do
+            st=$(aws codebuild batch-get-builds --ids "$BUILD_ID" --query 'builds[0].buildStatus' --output text)
+            case "$st" in
+              IN_PROGRESS) sleep 20 ;;
+              SUCCEEDED) echo "deploy build succeeded"; exit 0 ;;
+              *) echo "deploy build ended: $st"; exit 1 ;;
+            esac
+          done
+          echo "timed out waiting for deploy build"; exit 1
 
       - name: Skip — no service code changed
         if: steps.changes.outputs.services == ''

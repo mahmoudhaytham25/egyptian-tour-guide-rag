@@ -36,6 +36,10 @@ const config = {
   allowedAppCidrs: ['0.0.0.0/0'],
   sshCidr: undefined as string | undefined, // set e.g. '1.2.3.4/32' for port 22
   keyPairName: undefined as string | undefined, // EC2 key pair for SSH (SSM needs none)
+
+  // Only one GitHub OIDC provider may exist per account — if another IaC
+  // project already created one, paste its ARN here to import instead.
+  githubOidcProviderArn: undefined as string | undefined,
 };
 // --------------------------------------------------------------------------
 
@@ -83,6 +87,7 @@ function main() {
     },
     repoUrl: config.repoUrl,
     instance: compute.instance,
+    appPort: config.appPort,
   });
   deploy.addStackDependency(compute);
 
@@ -91,6 +96,8 @@ function main() {
     name,
     githubRepo: config.githubRepo,
     codebuildProjectArn: deploy.project.projectArn,
+    codebuildProjectName: deploy.project.projectName,
+    oidcProviderArn: config.githubOidcProviderArn,
   }).addStackDependency(deploy);
 
   app.synth();

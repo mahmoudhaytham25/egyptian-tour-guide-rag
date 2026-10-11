@@ -6,24 +6,35 @@ version: 0.2
 # The GitHub Actions deploy job detects which service dirs changed and starts
 # this build with env overrides:
 #   CHANGED_SERVICES  space-separated dirs ("backend", "frontend",
-#                     "model-server" — any subset)
-#   IMAGE_TAG         tag to publish (the push commit SHA; 'latest' also updated)
+#                     "model-server" — any subset; default: all three)
+#   IMAGE_TAG         tag to publish (the push commit SHA; 'latest' is always
+#                     updated too — the box tracks :latest, the sha tags are
+#                     audit/rollback handles. Default: latest)
+#   GIT_REF           ref to check out (default: IMAGE_TAG, or main when
+#                     IMAGE_TAG is unset/latest — i.e. manual runs)
 # Project env provides: REPO_URL, ECR_REGISTRY, ECR_BACKEND_REPO,
-# ECR_FRONTEND_REPO, ECR_MODEL_SERVER_REPO, APP_DIR, INSTANCE_ID.
+# ECR_FRONTEND_REPO, ECR_MODEL_SERVER_REPO, APP_DIR, APP_PORT, INSTANCE_ID.
+#
+# Note: env vars set inside a phase don't cross phases (separate shells) —
+# the defaults are re-applied wherever a var is used.
 
 phases:
   pre_build:
     commands:
+      - IMAGE_TAG="${IMAGE_TAG:-latest}"
+      - GIT_REF="${GIT_REF:-$IMAGE_TAG}"
+      - '[ "$GIT_REF" = "latest" ] && GIT_REF=main'
       - git clone --quiet "$REPO_URL" src
-      - cd src && git checkout --quiet "$IMAGE_TAG"
-      - echo "deploying [$CHANGED_SERVICES] at $IMAGE_TAG"
+      - cd src && git checkout --quiet "$GIT_REF"
+      - echo "deploying [${CHANGED_SERVICES:-backend frontend model-server}] at $IMAGE_TAG (ref $GIT_REF)"
       - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
   build:
     commands:
       - |
         cd src   # phases run separate shells — pre_build's cd doesn't persist
-        for svc in $CHANGED_SERVICES; do
+        IMAGE_TAG="${IMAGE_TAG:-latest}"
+        for svc in ${CHANGED_SERVICES:-backend frontend model-server}; do
           case "$svc" in
             backend)      repo="$ECR_BACKEND_REPO" ;;
             frontend)     repo="$ECR_FRONTEND_REPO" ;;
@@ -44,19 +55,24 @@ phases:
           echo "build phase failed or ran nothing — skipping redeploy"
           exit 0
         fi
+        # The box's .env keeps IMAGE_TAG=latest permanently — 'latest' moved
+        # with this push, so compose recreates only the rebuilt services.
+        # (Pinning a single sha tag would break partial deploys: the unbuilt
+        # services have no image at that tag, so pull would fail.)
         params=$(printf '{"commands":[
           "set -e",
+          "for i in $(seq 1 90); do [ -f %s/.env ] && break; sleep 5; done",
           "cd %s",
           "git pull --ff-only",
-          "sed -i s/^IMAGE_TAG=.*/IMAGE_TAG=%s/ .env",
           "aws ecr get-login-password --region %s | docker login --username AWS --password-stdin %s",
           "docker compose -f docker-compose.prod.yml pull",
-          "docker compose -f docker-compose.prod.yml up -d"
-        ]}' "$APP_DIR" "$IMAGE_TAG" "$AWS_DEFAULT_REGION" "$ECR_REGISTRY" | tr -d '\n')
+          "docker compose -f docker-compose.prod.yml up -d",
+          "i=0; until curl -sf http://localhost:%s/api/health >/dev/null; do i=$((i+1)); if [ $i -ge 45 ]; then echo still-unhealthy; docker compose -f docker-compose.prod.yml logs --tail 40; exit 1; fi; sleep 2; done"
+        ]}' "$APP_DIR" "$APP_DIR" "$AWS_DEFAULT_REGION" "$ECR_REGISTRY" "$APP_PORT" | tr -d '\n')
         cmd=$(aws ssm send-command \
           --instance-ids "$INSTANCE_ID" \
           --document-name AWS-RunShellScript \
-          --comment "deploy $IMAGE_TAG" \
+          --comment "deploy ${IMAGE_TAG:-latest}" \
           --parameters "$params" \
           --query 'Command.CommandId' --output text)
         echo "ssm command: $cmd"

@@ -65,10 +65,12 @@ works without credentials; cross-stack values pass through SSM parameters
    | *(your region)*                          | `AWS_REGION`          | variable |
 
 5. Push to `main` — the `deploy` CI job diffs the push and calls
-   `codebuild start-build` with `CHANGED_SERVICES` + `IMAGE_TAG`. The
-   buildspec clones the repo at that SHA, builds+pushes each changed image
-   (`<sha>` + `latest`), then sends an SSM command that `git pull`s the box,
-   pins `IMAGE_TAG` in its `.env`, and `compose pull && up -d`s it.
+   `codebuild start-build` with `CHANGED_SERVICES` + `IMAGE_TAG`, then
+   waits on the build. The buildspec clones the repo at that SHA,
+   builds+pushes each changed image (`<sha>` + `latest`), then sends an SSM
+   command that `git pull`s the box, `compose pull && up -d`s it (the box's
+   `.env` always tracks `:latest`, so only rebuilt services restart), and
+   polls `http://localhost:<APP_PORT>/api/health` until the stack answers.
 
 First boot: read `AppUrl` from the compute stack outputs, wait ~5 min, check
 `/var/log/tour-guide-bootstrap.log` via `aws ssm start-session --target <id>`
@@ -85,16 +87,31 @@ secrets never enter the template, CDK state, or user data.
 
 ## Deploying a new release
 
-Just push to `main` — the `deploy` job handles it. The deploy job is a
-no-op until the three GitHub entries above exist (it skips cleanly). To pin
-a specific commit on first boot instead of `latest`, set `imageTag` in
-`bin/app.ts` — changing user data replaces the instance (fresh box, empty
-mongo/vector volumes).
+Just push to `main` — the `deploy` job handles it (and now fails the check
+if the build or the health check fails). The deploy job is a no-op until
+the three GitHub entries above exist (it skips cleanly). To pin a specific
+commit on first boot instead of `latest`, set `imageTag` in `bin/app.ts` —
+changing user data replaces the instance (fresh box, empty mongo/vector
+volumes).
+
+Manual deploys: trigger the `<name>-build` project in the CodeBuild console
+with no overrides — it builds all three services off `main` and tags them
+`:latest`. Override `CHANGED_SERVICES` / `IMAGE_TAG` / `GIT_REF` for a
+partial or pinned build. Rollback: retag an older sha image as `latest` in
+ECR (`aws ecr batch-get-image` + `put-image`), then run a manual build —
+the redeploy pulls it.
 
 ## Cost note
 
 t3.small + 30 GB gp3 + EIP + 3 ECR repos + 1 secret ≈ ~$20/mo (t3.small is
 **not** free-tier eligible — t3.micro would be, but mongo + the Python
 model server want the 2 GB). EIP is free while attached to a running
-instance — **`cdk destroy --all` when done**; an unattached EIP and a live
-secret both bill while idle.
+instance — **`cdk destroy --all` when done**; every resource is
+`RemovalPolicy.DESTROY`, so nothing keeps billing afterwards (an
+unattached EIP is the classic one to watch if you ever disassociate it by
+hand).
+
+Note: AWS allows only **one** `token.actions.githubusercontent.com` OIDC
+provider per account. If another IaC project already created one, set
+`githubOidcProviderArn` in `bin/app.ts` to import it instead of creating a
+duplicate.
