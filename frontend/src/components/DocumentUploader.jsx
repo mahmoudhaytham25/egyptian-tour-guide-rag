@@ -32,7 +32,9 @@ const DocumentUploader = ({ onDocumentUploaded }) => {
 
     try {
       const result = await api.uploadDocument(file);
-      setMessage(`Document uploaded successfully: ${result.filename}`);
+      // Older backends may not return a filename — fall back to the
+      // selected file's name rather than printing 'undefined'.
+      setMessage(`Document uploaded successfully: ${result.filename || file.name}`);
 
       // Important: Call this function to refresh document list
       if (onDocumentUploaded) {

@@ -10,7 +10,8 @@ import time
 
 import pytest
 
-from models.llm import LLMModel, MAX_RETRIES
+from models.llm import LLMModel, EmptyResponseError, MAX_RETRIES
+from rag.errors import DeadlineExceeded
 
 
 class FakeAPIError(Exception):
@@ -25,7 +26,9 @@ class FakeAPIError(Exception):
 class StubModelsApi:
     """client.models stand-in — raises scripted errors per model name and
     records every model it was called with. A list value means the calls
-    raise in sequence until the script runs out, then succeed."""
+    run the script in sequence until it runs out, then succeed. List
+    items or dict values that aren't Exceptions are returned as the
+    response (for scripted empty/blocked replies)."""
 
     def __init__(self, script=None):
         self.script = script or {}
@@ -36,9 +39,13 @@ class StubModelsApi:
         outcome = self.script.get(model)
         if isinstance(outcome, list):
             if outcome:
-                raise outcome.pop(0)
-        elif outcome is not None:
+                outcome = outcome.pop(0)
+            else:
+                outcome = None
+        if isinstance(outcome, Exception):
             raise outcome
+        if outcome is not None:
+            return outcome
         return types.SimpleNamespace(text=f"answer from {model}")
 
 
@@ -130,3 +137,95 @@ class TestFallbackChain:
         model, api = make_model({"gemini-3.8-flash": FakeAPIError(429)})
         assert model.generate("p") == "answer from custom-a"
         assert api.calls == ["gemini-3.8-flash", "custom-a"]
+
+
+class TestEmptyResponse:
+    """response.text is None on safety blocks / RECITATION / empty
+    candidates — generate() must never return None to callers."""
+
+    def test_none_text_hops_to_next_tier(self):
+        model, api = make_model({
+            "gemini-3.8-flash": types.SimpleNamespace(text=None),
+        })
+        assert model.generate("p") == "answer from gemini-3.7-flash"
+        assert api.calls == ["gemini-3.8-flash", "gemini-3.7-flash"]
+
+    def test_blank_text_hops_to_next_tier(self):
+        model, api = make_model({
+            "gemini-3.8-flash": types.SimpleNamespace(text="   "),
+        })
+        assert model.generate("p") == "answer from gemini-3.7-flash"
+        assert api.calls == ["gemini-3.8-flash", "gemini-3.7-flash"]
+
+    def test_empty_on_last_tier_raises(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "custom-a")
+        model, api = make_model({
+            "gemini-3.8-flash": types.SimpleNamespace(text=None),
+            "custom-a": types.SimpleNamespace(text=None),
+        })
+        with pytest.raises(EmptyResponseError):
+            model.generate("p")
+        assert api.calls == ["gemini-3.8-flash", "custom-a"]
+
+    def test_empty_response_does_not_retry_same_tier(self):
+        # A safety block is deterministic for the same prompt+model —
+        # retrying the tier can only reproduce it.
+        model, api = make_model({
+            "gemini-3.8-flash": types.SimpleNamespace(text=None),
+        })
+        model.generate("p")
+        assert api.calls.count("gemini-3.8-flash") == 1
+
+
+class TestDeadline:
+    def test_blown_deadline_raises_before_any_call(self):
+        model, api = make_model({})
+        with pytest.raises(DeadlineExceeded):
+            model.generate("p", deadline=time.monotonic() - 1)
+        assert api.calls == []
+
+    def test_deadline_aborts_between_retries(self, monkeypatch):
+        # The budget expires after the first failed attempt — the retry
+        # loop must stop instead of sleeping and retrying.
+        sleeps = []
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+        model, api = make_model({
+            "gemini-3.8-flash": [FakeAPIError(503)] * MAX_RETRIES,
+        })
+        real_monotonic = time.monotonic
+        calls = {"n": 0}
+
+        def fake_monotonic():
+            calls["n"] += 1
+            # First two reads (deadline comparisons before attempt 1 and
+            # the wait cap) are inside budget; everything after is blown.
+            return real_monotonic() + (0 if calls["n"] <= 2 else 1000)
+
+        monkeypatch.setattr(time, "monotonic", fake_monotonic)
+        deadline = real_monotonic() + 60
+        with pytest.raises(DeadlineExceeded):
+            model.generate("p", deadline=deadline)
+        assert api.calls == ["gemini-3.8-flash"]
+
+    def test_no_deadline_still_retries(self, monkeypatch):
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        model, api = make_model({
+            "gemini-3.8-flash": [FakeAPIError(503)],
+        })
+        assert model.generate("p") == "answer from gemini-3.8-flash"
+        assert api.calls == ["gemini-3.8-flash", "gemini-3.8-flash"]
+
+
+class TestBackoffReset:
+    def test_delay_resets_between_tiers(self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+        model, api = make_model({
+            # 503 → backoff sleep, then 429 → hop tiers
+            "gemini-3.8-flash": [FakeAPIError(503), FakeAPIError(429)],
+            # First attempt on the new tier must sleep the INITIAL
+            # backoff, not the doubled value left over from the primary.
+            "gemini-3.7-flash": [FakeAPIError(503)],
+        })
+        assert model.generate("p") == "answer from gemini-3.7-flash"
+        assert sleeps == [2.0, 2.0]

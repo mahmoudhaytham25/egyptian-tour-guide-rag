@@ -14,6 +14,7 @@ from models.gemini import (
     is_retryable_error,
     RATE_LIMIT_WAIT_SECONDS,
 )
+from rag.errors import DeadlineExceeded, check_deadline, cap_wait
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -85,10 +86,14 @@ class EmbeddingModel:
             logger.error(f"Error loading model: {str(e)}")
             return False
 
-    def _embed_batch(self, texts, task_type):
+    def _embed_batch(self, texts, task_type, deadline=None):
         """
         Call embed_content for one batch (<= MAX_BATCH_SIZE texts) with
         retry/backoff on transient failures.
+
+        deadline is an optional time.monotonic() value — checked before
+        every attempt and used to cap retry sleeps so a blown budget
+        stops the loop instead of sleeping through it.
 
         Returns:
             list: List of embedding vectors (one per input text)
@@ -97,6 +102,9 @@ class EmbeddingModel:
 
         delay = INITIAL_BACKOFF_SECONDS
         for attempt in range(1, MAX_RETRIES + 1):
+            # Hard stop on a blown budget — outside the try so the generic
+            # handler can't classify it as a retryable API error.
+            check_deadline(deadline)
             try:
                 result = self.client.models.embed_content(
                     model=self.model_name,
@@ -123,6 +131,7 @@ class EmbeddingModel:
                 # Per-minute quota exhaustion needs a long wait, not jitter —
                 # regular transient errors keep the short exponential backoff.
                 wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
+                wait = cap_wait(wait, deadline)
                 logger.warning(
                     f"Embedding request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
                     f"retrying in {wait:.0f}s"
@@ -176,24 +185,34 @@ class EmbeddingModel:
             logger.error(f"Error generating embeddings: {str(e)}")
             return None
 
-    def get_query_embedding(self, query):
+    def get_query_embedding(self, query, deadline=None):
         """
         Generate embedding for a query.
 
         Args:
             query (str): Query text
+            deadline: Optional time.monotonic() deadline from the caller —
+                forwarded into the retry loop. None means no budget.
 
         Returns:
             numpy.ndarray: L2-normalized query embedding, or None on failure
+
+        Raises:
+            DeadlineExceeded: If the caller's time budget is blown — a
+                cancellation, not an embedding failure, so it propagates
+                instead of collapsing to None.
         """
         if not self.model_loaded:
             if not self.load_model():
                 return None
 
         try:
-            embedding = self._embed_batch([query], task_type="retrieval_query")
+            embedding = self._embed_batch(
+                [query], task_type="retrieval_query", deadline=deadline)
             embedding = np.asarray(embedding, dtype=np.float32)
             return self._normalize(embedding)[0]
+        except DeadlineExceeded:
+            raise
         except Exception as e:
             logger.error(f"Error generating query embedding: {str(e)}")
             return None

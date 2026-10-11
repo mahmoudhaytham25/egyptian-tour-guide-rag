@@ -25,9 +25,10 @@ const DEFAULT_CORS_ORIGINS = [
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
-  // One trusted proxy hop (the frontend nginx / compose network) so the rate
-  // limiter buckets by real client IP instead of the proxy address.
-  app.set('trust proxy', 1);
+  // 'trust proxy' stays off: the browser calls this server directly (no
+  // reverse proxy in front), so trusting X-Forwarded-For would let a client
+  // spoof req.ip and defeat the rate limiter. If a real proxy is added,
+  // trust its subnet explicitly rather than a hop count.
   app.use(helmet());
 
   // Bearer-token auth — no cookies — so CORS credentials are not needed.

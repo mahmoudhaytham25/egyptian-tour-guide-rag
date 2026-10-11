@@ -10,18 +10,13 @@ from typing import List, Dict
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.llm import LLMModel
+from rag.errors import DeadlineExceeded
 from rag.retriever import Retriever
 from rag.utils import get_data_dir
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-class DeadlineExceeded(Exception):
-    """Raised between pipeline stages when the caller's time budget is
-    already blown — stops issuing further Gemini calls to produce an
-    answer the client could no longer receive anyway."""
 
 
 # Zero-cost stand-in for the removed LLM intent classifier: the
@@ -53,9 +48,14 @@ class Generator:
         q = query.lower()
         return any(marker in q for marker in SCHEDULE_MARKERS)
 
-    def get_schedule_parameters(self, query):
+    def get_schedule_parameters(self, query, deadline=None):
         """
         Extract filter parameters from schedule-seeking query.
+
+        deadline is forwarded to llm.generate so its retry/fallback loop
+        aborts instead of sleeping through a blown budget. generate()
+        never returns None, so .strip() below can't AttributeError — a
+        blocked/empty response raises EmptyResponseError instead.
         """
         parameter_prompt = f"""
         Extract the following parameters from the user's query about visiting Egyptian monuments or locations:
@@ -74,7 +74,8 @@ class Generator:
         city=<extracted city>;day=<extracted day>
         """
 
-        response = self.llm.generate(parameter_prompt, max_tokens=1024).strip()
+        response = self.llm.generate(
+            parameter_prompt, max_tokens=1024, deadline=deadline).strip()
 
         # Parse response
         try:
@@ -101,7 +102,7 @@ class Generator:
             logger.error(f"Error parsing parameters: {str(e)}")
             return {"error": "invalid_format"}
 
-    def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str="", retriever=None):
+    def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str="", retriever=None, deadline=None):
         """
         Generate a schedule response for Egyptian monument visits.
 
@@ -112,6 +113,9 @@ class Generator:
             retriever: Retriever for the queried document — times data is
                 document-independent, but using the caller's retriever keeps
                 a single shared instance per document
+            deadline: Optional time.monotonic() deadline — checked again
+                right before the expensive LLM call and forwarded into
+                generate()'s retry loop
 
         Returns:
             dict: Response with schedule information or error
@@ -181,8 +185,11 @@ class Generator:
             User Query: {query}
             """
 
-            # Generate the schedule
-            schedule_response = self.llm.generate(schedule_prompt, max_tokens= max_tokens)
+            # Last hard deadline check before the expensive call — the
+            # retrieval path does the same ahead of its final generate.
+            self._check_deadline(deadline)
+            schedule_response = self.llm.generate(
+                schedule_prompt, max_tokens= max_tokens, deadline=deadline)
             logger.info(f"Schedule response from LLM:\n{schedule_response}")
 
             if not schedule_response or not schedule_response.strip():
@@ -267,10 +274,11 @@ Respond with a comprehensive answer:
                 concurrent queries for different documents on different
                 threads and a shared attribute would race.
             deadline: Optional time.monotonic() deadline from the caller.
-                Once it passes, the optional enhance pass is skipped and a
-                DeadlineExceeded is raised before each further LLM call —
-                no point burning Gemini calls on an answer the client can
-                no longer receive.
+                Once it passes, the optional enhance pass is skipped, a
+                DeadlineExceeded is raised before each further LLM call,
+                and the LLM/embedding retry loops check it between
+                attempts — no point burning Gemini calls on an answer the
+                client can no longer receive.
 
         Returns:
             Generated response with sources
@@ -297,7 +305,7 @@ Respond with a comprehensive answer:
             # query can still retrieve and answer inside it.
             original_query = query
             if chat_history and len(selected_history) > 0 and not self._over_deadline(deadline):
-                query = self.enhance_query_with_context(original_query, selected_history, self.llm)
+                query = self.enhance_query_with_context(original_query, selected_history, self.llm, deadline=deadline)
                 logger.info(f"Enhanced query: '{original_query}' → '{query}'")
 
             # Itinerary-style asks take the schedule path (keyword route —
@@ -305,13 +313,13 @@ Respond with a comprehensive answer:
             # pick a branch).
             if self._is_schedule_query(query):
                 self._check_deadline(deadline)
-                params = self.get_schedule_parameters(query)
+                params = self.get_schedule_parameters(query, deadline=deadline)
                 self._check_deadline(deadline)
 
-                return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history, retriever = retriever)
+                return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history, retriever = retriever, deadline = deadline)
 
             # Use enhanced query for retrieval
-            search_results = retriever.search(query, top_k=top_k)
+            search_results = retriever.search(query, top_k=top_k, deadline=deadline)
 
             # Convert search results to expected format
             retrieved_documents = []
@@ -335,7 +343,7 @@ Respond with a comprehensive answer:
             # Generate response using the enhanced prompt — last hard
             # deadline check before the expensive call.
             self._check_deadline(deadline)
-            answer = self.llm.generate(enhanced_prompt)
+            answer = self.llm.generate(enhanced_prompt, deadline=deadline)
 
             # Extract sources from retrieved documents for citation
             sources = [
@@ -358,15 +366,17 @@ Respond with a comprehensive answer:
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
             raise
 
-    def enhance_query_with_context(self, query, chat_history, llm):
+    def enhance_query_with_context(self, query, chat_history, llm, deadline=None):
         """
         Enhance queries with contextual information from chat history.
-        
+
         Args:
             query (str): Current user query
             chat_history (list): List of previous messages with role and content
             llm: LLM instance for query enhancement
-            
+            deadline: Optional time.monotonic() deadline — forwarded into
+                generate()'s retry loop
+
         Returns:
             str: Enhanced query with contextual information
         """
@@ -420,7 +430,11 @@ Respond with a comprehensive answer:
         # whole request.
         try:
             # A ≤200-char rewrite doesn't need the 4096-token default
-            enhanced_query = llm.generate(enhancement_prompt, max_tokens=256).strip()
+            enhanced_query = llm.generate(
+                enhancement_prompt, max_tokens=256, deadline=deadline).strip()
+        except DeadlineExceeded:
+            # Cancellation, not an enhancement failure — propagate.
+            raise
         except Exception as e:
             logger.warning(f"Query enhancement failed, using original query: {str(e)}")
             return query

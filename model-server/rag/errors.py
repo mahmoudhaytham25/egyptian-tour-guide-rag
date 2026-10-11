@@ -1,0 +1,26 @@
+import time
+
+
+class DeadlineExceeded(Exception):
+    """Raised when the caller's time budget is already blown — stops
+    issuing further Gemini calls to produce an answer the client could
+    no longer receive anyway. Lives here (not rag.generator) so the
+    model retry loops in models/ can raise it without a circular
+    import."""
+
+
+def check_deadline(deadline):
+    """Hard stop before another API attempt on a blown budget.
+
+    deadline is a time.monotonic() value, or None for no budget.
+    """
+    if deadline is not None and time.monotonic() >= deadline:
+        raise DeadlineExceeded("time budget exhausted")
+
+
+def cap_wait(wait, deadline):
+    """Cap a retry sleep at the time remaining before deadline so a
+    65s rate-limit wait can't overshoot the caller's budget."""
+    if deadline is None:
+        return wait
+    return min(wait, max(0.0, deadline - time.monotonic()))

@@ -123,22 +123,29 @@ const useChat = () => {
         const safeList = Array.isArray(list) ? list : [];
         setConversations(safeList);
 
-        // Only auto-open the latest conversation when nothing is open — a
-        // retry resolving late must not clobber a conversation the user
-        // already picked in the meantime.
-        if (safeList.length > 0 && !activeConversationIdRef.current) {
+        // Auto-open the latest conversation only on the initial mount and
+        // only when nothing is open — a retry resolving late must not
+        // clobber a conversation the user already picked, nor the empty
+        // pane they opened via "+ New chat".
+        if (
+          conversationsReloadKey === 0 &&
+          safeList.length > 0 &&
+          !activeConversationIdRef.current
+        ) {
           const latest = safeList[0];
-          setActiveConversationId(latest._id);
-          localStorage.setItem(`conversationId_${uid}`, latest._id);
-
           try {
             const data = await api.getConversation(latest._id);
             if (!isMounted) return;
+            // Commit the id only after the fetch proves the conversation
+            // is alive — a dead id committed here would 404 every send.
+            setActiveConversationId(latest._id);
+            localStorage.setItem(`conversationId_${uid}`, latest._id);
             if (data && Array.isArray(data.messages)) {
               setMessages(data.messages.map(formatConversationMessage));
             }
           } catch {
-            // Conversation may have been deleted between calls — non-fatal.
+            // Conversation may have been deleted between calls — non-fatal;
+            // leave it unactivated so sends don't inherit the dead id.
           }
         }
         // No conversations yet: one is created lazily on the first send.
@@ -173,6 +180,14 @@ const useChat = () => {
     setConversationsReloadKey((key) => key + 1);
   }, []);
 
+  // Unmount-only invalidation: a /query resolving after unmount must not
+  // schedule stream chunks or write into the pane. Kept separate from the
+  // load effect above — its cleanup also runs on conversationsReloadKey
+  // retries, where an in-flight send should survive.
+  useEffect(() => {
+    return () => invalidatePendingWork();
+  }, [invalidatePendingWork]);
+
   // The document list behind the corpus picker — fetched once on mount and
   // again whenever the picker is focused (a cheap GET), which covers docs
   // uploaded/indexed on the Knowledge Base page since the chat was opened.
@@ -180,7 +195,17 @@ const useChat = () => {
     if (!api.getUserId()) return; // no token — same guard as conversations
     try {
       const data = await api.getDocuments();
-      setDocuments(Array.isArray(data?.documents) ? data.documents : []);
+      const fresh = Array.isArray(data?.documents) ? data.documents : [];
+      setDocuments(fresh);
+      // A selection that vanished from the list or lost its index can't be
+      // queried — fall back to the default corpus so the picker never aims
+      // /query at a document the backend would reject. Functional update
+      // keeps this callback free of a selectedDocument dep.
+      setSelectedDocument((prev) =>
+        fresh.some((doc) => doc.id === prev && doc.indexed)
+          ? prev
+          : DEFAULT_DOCUMENT
+      );
     } catch {
       // Non-fatal — the picker keeps whatever it already shows.
     }
@@ -228,12 +253,14 @@ const useChat = () => {
 
   // The conversation the next /query call should persist into:
   // the selected one, or whatever was previously stored for this user.
+  // Reads the ref (not the state var) so a mid-send recovery that just
+  // cleared a dead id doesn't hand the stale value straight back.
   const getActiveConversationId = useCallback(() => {
     return (
-      activeConversationId ||
+      activeConversationIdRef.current ||
       (userId ? localStorage.getItem(`conversationId_${userId}`) : null)
     );
-  }, [activeConversationId, userId]);
+  }, [userId]);
 
   // Lazily create a backend conversation for a brand-new chat so that
   // /query has a conversationId to persist messages into.
@@ -290,8 +317,11 @@ const useChat = () => {
       const apiResponse = await api.askQuestion(requestData);
 
       // Refresh the sidebar so a newly created conversation appears and
-      // the ordering reflects the latest activity.
-      refreshConversations();
+      // the ordering reflects the latest activity — but only when this
+      // query actually persisted into one.
+      if (conversationFeaturesAvailable && conversationId) {
+        refreshConversations();
+      }
 
       return apiResponse;
     },
@@ -457,6 +487,11 @@ const useChat = () => {
       // instead of landing in a pane the user has already left.
       const seq = ++sendSeqRef.current;
 
+      // One-shot guard for the stale-conversation recovery below — the
+      // retry goes through a fresh conversation, so a second 404 is a
+      // real failure, not another recovery attempt.
+      let conversationRecovered = false;
+
       cancelPendingTimers(); // never run two streams at once
       setMessages((prev) => [...prev, makeLocalMessage("user", trimmed)]);
       setInput("");
@@ -469,9 +504,54 @@ const useChat = () => {
       } catch (error) {
         if (seq !== sendSeqRef.current) return;
 
-        // A 400 while conversation features are enabled means the backend
-        // rejected the conversation payload — retry once as a plain query.
-        if (error.response?.status === 400 && conversationFeaturesAvailable) {
+        // A 404 while a conversationId was attached means that
+        // conversation is gone (deleted or never persisted) — drop the
+        // dead id everywhere and retry once; ensureActiveConversation
+        // lazily creates a fresh conversation for the retry.
+        if (
+          error.response?.status === 404 &&
+          conversationFeaturesAvailable &&
+          !conversationRecovered &&
+          (activeConversationIdRef.current ||
+            (userId && localStorage.getItem(`conversationId_${userId}`)))
+        ) {
+          conversationRecovered = true;
+          setActiveConversationId(null);
+          activeConversationIdRef.current = null;
+          if (userId) {
+            localStorage.removeItem(`conversationId_${userId}`);
+          }
+          try {
+            const retryResponse = await askWithConversation(trimmed);
+            if (seq !== sendSeqRef.current) return;
+            simulateStreaming(extractAnswerText(retryResponse));
+            return;
+          } catch (retryError) {
+            if (seq !== sendSeqRef.current) return;
+            setMessages((prev) => [
+              ...prev,
+              makeLocalMessage(
+                "error",
+                retryError.response?.data?.message || GENERIC_ERROR_MESSAGE
+              ),
+            ]);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // A 400 whose message names the conversation — or an unlabeled
+        // 400 — means this backend rejected the persistence payload
+        // itself: disable it and retry once as a plain query. Labeled
+        // 400s about something else ('Question is too long', 'Invalid
+        // document name', ...) are ordinary user-facing errors that must
+        // not flip the feature flag.
+        const errorMessage = error.response?.data?.message;
+        if (
+          error.response?.status === 400 &&
+          conversationFeaturesAvailable &&
+          (!errorMessage || /conversation/i.test(errorMessage))
+        ) {
           setConversationFeaturesAvailable(false);
           try {
             const retryResponse = await api.askQuestion({
@@ -514,6 +594,7 @@ const useChat = () => {
       simulateStreaming,
       conversationFeaturesAvailable,
       selectedDocument,
+      userId,
     ]
   );
 

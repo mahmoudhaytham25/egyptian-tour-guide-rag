@@ -332,11 +332,20 @@ def index_document():
     job_id = uuid.uuid4().hex
     _update_index_job(status="indexing", job_id=job_id, filename=safe_filename, error=None)
 
-    threading.Thread(
-        target=_run_indexing_job,
-        args=(safe_filename, pdf_path),
-        daemon=True,
-    ).start()
+    try:
+        threading.Thread(
+            target=_run_indexing_job,
+            args=(safe_filename, pdf_path),
+            daemon=True,
+        ).start()
+    except Exception:
+        # The worker never ran, so nothing else will release
+        # indexing_lock — hand it back here or every later POST /index
+        # wedges at 409.
+        logger.exception(f"Failed to start indexing thread for {safe_filename}")
+        indexing_lock.release()
+        _update_index_job(status="error", error="failed to start indexing job")
+        return jsonify({"error": "failed to start indexing job"}), 500
 
     logger.info(f"Indexing started for {filename} (job {job_id})")
     return jsonify({

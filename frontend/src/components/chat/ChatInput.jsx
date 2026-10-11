@@ -33,6 +33,10 @@ const ChatInput = ({ value, onChange, onKeyDown, onSend, disabled, inputRef }) =
           onChange={handleChange}
           onKeyDown={onKeyDown}
           rows={1}
+          // Matches the backend's MAX_QUERY_LENGTH — the field can never
+          // grow past the 'Question is too long' 400 (the server-side
+          // guard stays the real boundary).
+          maxLength={2000}
         />
         <button
           type="button"

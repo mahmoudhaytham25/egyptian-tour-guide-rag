@@ -56,22 +56,22 @@ class PDFIndexer:
             # PyMuPDF must be installed (see requirements.txt)
             import fitz
             
-            # Open the PDF
-            doc = fitz.open(self.pdf_path)
-            total_pages = len(doc)
-            logger.info(f"PDF loaded successfully. Total pages: {total_pages}")
-            
-            # Extract text from each page
-            all_text = []
-            for page_num in tqdm(range(total_pages), desc="Extracting text"):
-                page = doc.load_page(page_num)
-                text = page.get_text()
-                all_text.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-            
-            doc.close()
+            # Open the PDF — the context manager closes the document even
+            # when page extraction throws partway through.
+            with fitz.open(self.pdf_path) as doc:
+                total_pages = len(doc)
+                logger.info(f"PDF loaded successfully. Total pages: {total_pages}")
+
+                # Extract text from each page
+                all_text = []
+                for page_num in tqdm(range(total_pages), desc="Extracting text"):
+                    page = doc.load_page(page_num)
+                    text = page.get_text()
+                    all_text.append({
+                        "page_num": page_num + 1,
+                        "text": text
+                    })
+
             return all_text
         except Exception as e:
             logger.error(f"Error loading PDF: {str(e)}")
@@ -169,6 +169,12 @@ class PDFIndexer:
             # Write each file to a temp path in the same directory, then
             # os.replace it into place — atomic on POSIX, so a concurrent
             # query can never observe a half-written vector store.
+            # The pair as a whole is NOT atomic: a reader mid-reindex can
+            # pick up new vectors with old metadata. The shared generation
+            # stamp lets the loader detect that mismatch instead of
+            # silently pairing chunks with the wrong embeddings.
+            generation = uuid.uuid4().hex
+
             logger.info(f"Saving vectors to {self.vector_file}")
             fd, tmp_vectors = tempfile.mkstemp(
                 dir=self.vector_store_dir, prefix=".tmp-vectors-", suffix=".npz"
@@ -177,7 +183,11 @@ class PDFIndexer:
                 os.close(fd)
                 # tmp path already ends in .npz so savez_compressed won't
                 # append a second extension
-                np.savez_compressed(tmp_vectors, embeddings=embeddings)
+                np.savez_compressed(
+                    tmp_vectors,
+                    embeddings=embeddings,
+                    generation=np.array(generation),
+                )
                 os.replace(tmp_vectors, self.vector_file)
             finally:
                 if os.path.exists(tmp_vectors):
@@ -189,7 +199,7 @@ class PDFIndexer:
             )
             try:
                 with os.fdopen(fd, 'w') as f:
-                    json.dump(metadata, f)
+                    json.dump({"generation": generation, "chunks": metadata}, f)
                 os.replace(tmp_metadata, self.metadata_file)
             finally:
                 if os.path.exists(tmp_metadata):

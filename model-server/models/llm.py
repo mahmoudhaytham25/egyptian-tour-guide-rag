@@ -12,6 +12,7 @@ from models.gemini import (
     is_retryable_error,
     RATE_LIMIT_WAIT_SECONDS,
 )
+from rag.errors import check_deadline, cap_wait
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -54,6 +55,14 @@ def _fallback_models():
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
     ]
+
+
+class EmptyResponseError(RuntimeError):
+    """The API returned a response with no text — safety block,
+    RECITATION, or MAX_TOKENS with no parts. Treated as a tier failure
+    so the request falls back to the next model instead of returning
+    None (which callers used to persist as a literal "null" answer or
+    crash on .strip())."""
 
 
 def _is_model_unavailable(error):
@@ -99,7 +108,7 @@ class LLMModel:
             logger.error(f"Error loading model: {str(e)}")
             return False
 
-    def generate(self, prompt, max_tokens=4096, temperature=0.2):
+    def generate(self, prompt, max_tokens=4096, temperature=0.2, deadline=None):
         """
         Generate text based on the prompt using Gemini API.
 
@@ -107,12 +116,19 @@ class LLMModel:
             prompt (str): Input prompt
             max_tokens (int): Maximum number of tokens to generate
             temperature (float): Sampling temperature
+            deadline: Optional time.monotonic() deadline from the caller.
+                Checked before every retry attempt and used to cap retry
+                sleeps — once it passes there is no point burning more of
+                the fallback chain on an answer the client can't receive.
 
         Returns:
-            str: Generated text
+            str: Generated text — never None and never blank
 
         Raises:
+            DeadlineExceeded: If the caller's time budget is blown
             RuntimeError: If the model cannot be loaded
+            EmptyResponseError: If every tier returns a response with no
+                text (safety block, RECITATION, MAX_TOKENS with no parts)
             Exception: Propagates Gemini API errors once retries are
                 exhausted (or immediately for non-retryable failures).
                 Callers must handle failures and produce a user-facing
@@ -133,11 +149,18 @@ class LLMModel:
         models_to_try = [self.model_name] + [
             m for m in _fallback_models() if m != self.model_name
         ]
-        delay = INITIAL_BACKOFF_SECONDS
         last_error = None
         for model_index, model in enumerate(models_to_try):
             has_fallback = model_index < len(models_to_try) - 1
+            # Each tier restarts the exponential backoff — a 503 on the
+            # fallback shouldn't inherit the delay accumulated on the
+            # primary.
+            delay = INITIAL_BACKOFF_SECONDS
             for attempt in range(1, MAX_RETRIES + 1):
+                # Hard stop on a blown budget — outside the try so the
+                # generic handler can't classify it as a retryable API
+                # error.
+                check_deadline(deadline)
                 try:
                     # Generate content with an explicit per-request timeout so a
                     # hung API call can't tie up a worker thread indefinitely
@@ -156,29 +179,48 @@ class LLMModel:
                         ),
                     )
 
-                    # Return the text response
-                    return response.text
+                    # response.text is None when the model produced no
+                    # parts — safety block, RECITATION, or MAX_TOKENS.
+                    # That's a failed attempt, not an answer.
+                    text = response.text
+                    if text is None or not text.strip():
+                        raise EmptyResponseError(
+                            f"{model} returned an empty response (safety "
+                            f"block or no text parts)"
+                        )
+                    return text
                 except Exception as e:
                     last_error = e
                     # Rate-limited on this tier — hop to the next model's
                     # separate quota instead of waiting this one out. A
                     # model that doesn't exist on this key gets the same
-                    # treatment — retrying it can only fail again.
-                    if has_fallback and (is_rate_limit_error(e) or _is_model_unavailable(e)):
-                        reason = "rate-limited" if is_rate_limit_error(e) else "unavailable"
+                    # treatment — retrying it can only fail again — and
+                    # so does a blocked/empty response: the same prompt to
+                    # the same model produces the same block.
+                    if has_fallback and (isinstance(e, EmptyResponseError)
+                                         or is_rate_limit_error(e)
+                                         or _is_model_unavailable(e)):
+                        if isinstance(e, EmptyResponseError):
+                            reason = "returned an empty response"
+                        elif is_rate_limit_error(e):
+                            reason = "rate-limited"
+                        else:
+                            reason = "unavailable"
                         logger.warning(
                             f"{model} {reason} — falling back to "
                             f"{models_to_try[model_index + 1]} for this request"
                         )
                         break
-                    # Non-retryable errors (400-class rejections) fail
-                    # identically on every attempt — surface them immediately.
+                    # Non-retryable errors (400-class rejections, a block on
+                    # the last tier) fail identically on every attempt —
+                    # surface them immediately.
                     if attempt == MAX_RETRIES or not is_retryable_error(e):
                         logger.error(f"Error generating text: {str(e)}")
                         raise
                     # Per-minute quota exhaustion needs a long wait, not jitter —
                     # regular transient errors keep the short exponential backoff.
                     wait = RATE_LIMIT_WAIT_SECONDS if is_rate_limit_error(e) else delay
+                    wait = cap_wait(wait, deadline)
                     logger.warning(
                         f"LLM request failed (attempt {attempt}/{MAX_RETRIES}): {str(e)[:200]} — "
                         f"retrying in {wait:.0f}s"

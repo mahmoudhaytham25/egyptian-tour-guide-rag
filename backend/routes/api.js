@@ -25,7 +25,7 @@ const storage = multer.diskStorage({
   filename: function(req, file, cb) {
     const safe = safePdfFilename(file.originalname);
     if (!safe) {
-      return cb(new Error('Invalid filename. PDF files must end in .pdf'));
+      return cb(new HttpError(400, 'Invalid filename. PDF files must end in .pdf'));
     }
     cb(null, safe);
   }
@@ -36,7 +36,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max upload size
   fileFilter: function(req, file, cb) {
     if (file.mimetype !== 'application/pdf') {
-      return cb(new Error('Only PDF files are allowed!'), false);
+      return cb(new HttpError(400, 'Only PDF files are allowed!'), false);
     }
     cb(null, true);
   }
@@ -53,8 +53,13 @@ const uploadSingle = (req, res, next) => {
       }
       return next(new HttpError(400, err.message));
     }
-    // fileFilter rejection and other non-multer errors → 400
-    return next(new HttpError(400, err.message));
+    // Our own validation errors (fileFilter / filename callback above).
+    if (err instanceof HttpError) {
+      return next(err);
+    }
+    // Anything else is a storage/FS failure (missing dir, EACCES, ENOSPC) —
+    // err.message embeds absolute server paths, so return a generic 500.
+    return next(new HttpError(500, 'Upload failed'));
   });
 };
 
@@ -63,6 +68,14 @@ const uploadSingle = (req, res, next) => {
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: Number(process.env.API_RATE_LIMIT_MAX) || 60
+});
+
+// Permissive limiter for the status/list GETs — each /indexing-status call
+// is proxied to the model server, so an unlimited endpoint would be a cheap
+// amplification path. The frontend's 2s poll uses 30/min — 120/min is slack.
+const statusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.STATUS_RATE_LIMIT_MAX) || 120
 });
 
 // Health check endpoint (public)
@@ -78,11 +91,11 @@ router.post('/upload', apiLimiter, uploadSingle, ragController.uploadPdf);
 // Index the uploaded PDF
 router.post('/index', apiLimiter, ragController.indexDocument);
 
-router.get('/indexing-status', ragController.getIndexingStatus);
+router.get('/indexing-status', statusLimiter, ragController.getIndexingStatus);
 
 // Query the RAG system
 router.post('/query', apiLimiter, ragController.queryRag);
 
-router.get('/documents', ragController.getDocuments);
+router.get('/documents', statusLimiter, ragController.getDocuments);
 
 module.exports = router;

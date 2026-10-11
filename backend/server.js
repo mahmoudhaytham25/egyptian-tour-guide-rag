@@ -7,6 +7,7 @@ const { createApp } = require('./app');
 const connectDB = require('./config/database');
 const { validateEnv } = require('./config/env');
 const { DATA_DIR } = require('./config/paths');
+const { QUERY_TIMEOUT_MS } = require('./controllers/ragController');
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -30,9 +31,10 @@ async function start() {
     console.log(`- RAG routes: http://localhost:${PORT}/api`);
   });
 
-  // Keep connections from hanging forever; request timeout stays generous
-  // because proxied model-server calls can legitimately take ~2 minutes.
-  server.requestTimeout = 5 * 60 * 1000;
+  // Keep connections from hanging forever. requestTimeout must sit ABOVE the
+  // axios query timeout — equal values race at the boundary (a model answer
+  // or the 504 write can collide with Node destroying the socket).
+  server.requestTimeout = QUERY_TIMEOUT_MS + 30 * 1000;
   server.headersTimeout = 65 * 1000;
 
   // Node running as PID 1 ignores SIGTERM by default — close gracefully so

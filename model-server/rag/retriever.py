@@ -12,6 +12,7 @@ import traceback
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.embedding import EmbeddingModel
+from rag.errors import DeadlineExceeded
 from rag.utils import get_vector_store_dir, get_times_dir
 
 # Configure logging
@@ -76,11 +77,35 @@ class Retriever:
             # manager so the arrays are materialized and the handle closed
             with np.load(self.vector_file) as npz:
                 self.embeddings = npz["embeddings"]
-            
+                # Legacy stores carry no generation entry
+                vectors_generation = (
+                    npz["generation"].item() if "generation" in npz.files else None
+                )
+
             logger.info(f"Loading metadata from {self.metadata_file}")
             with open(self.metadata_file, 'r') as f:
-                self.metadata = json.load(f)
-            
+                metadata_payload = json.load(f)
+
+            # New stores wrap the chunk list with the generation stamp
+            # shared with the .npz; legacy stores are a bare chunk list.
+            if isinstance(metadata_payload, dict):
+                metadata_generation = metadata_payload.get("generation")
+                self.metadata = metadata_payload.get("chunks", [])
+            else:
+                metadata_generation = None
+                self.metadata = metadata_payload
+
+            # Each file is replaced atomically but the pair isn't — a
+            # reader mid-reindex could otherwise pair new vectors with old
+            # metadata and silently align chunks with the wrong embeddings.
+            # Mismatched generations (including one-sided legacy/new) fail
+            # the load; two legacy files (both None) still pass.
+            if vectors_generation != metadata_generation:
+                raise ValueError(
+                    f"vector store generation mismatch for {self.pdf_name}: "
+                    f"vectors={vectors_generation} metadata={metadata_generation}"
+                )
+
             # Verify data consistency
             if len(self.metadata) != self.embeddings.shape[0]:
                 logger.warning(f"Metadata length ({len(self.metadata)}) doesn't match embeddings count ({self.embeddings.shape[0]})")
@@ -92,19 +117,26 @@ class Retriever:
             logger.error(traceback.format_exc())
             return False
     
-    def search(self, query, top_k=10, score_thresh=0.2):
+    def search(self, query, top_k=10, score_thresh=0.2, deadline=None):
         """
         Search for relevant chunks based on the query.
-        
+
         Args:
             query (str): Query text
             top_k (int): Number of top results to retrieve (overrides instance value)
             score_thresh (float): Minimum similarity score threshold
-            
+            deadline: Optional time.monotonic() deadline — forwarded into
+                the query embedding's retry loop
+
         Returns:
             list: List of relevant chunks with metadata and scores
         """
         try:
+            # argsort(scores)[-0:] is the whole array — a non-positive
+            # top_k must short-circuit instead of returning every chunk.
+            if top_k <= 0:
+                return []
+
             if self.embeddings is None or self.metadata is None:
                 if not self.load_vectors():
                     return []
@@ -120,7 +152,8 @@ class Retriever:
             top_k = min(top_k, len(meta))
 
             # Generate query embedding
-            query_embedding = self.embedding_model.get_query_embedding(query)
+            query_embedding = self.embedding_model.get_query_embedding(
+                query, deadline=deadline)
             if query_embedding is None:
                 logger.error("Failed to generate query embedding")
                 return []
@@ -153,7 +186,11 @@ class Retriever:
             
             logger.info(f"Found {len(results)} relevant chunks for query: '{query}'")
             return results
-            
+
+        except DeadlineExceeded:
+            # Cancellation, not a search failure — let it reach the 504
+            # handler instead of collapsing to an empty result set.
+            raise
         except Exception as e:
             logger.error(f"Error searching: {str(e)}")
             logger.error(traceback.format_exc())

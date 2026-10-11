@@ -6,6 +6,10 @@ const DocumentManager = () => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [indexingStatus, setIndexingStatus] = useState({});
+  // The filename the running indexing job is actually working on — only
+  // that document gets the 'Indexing...' label; the rest stay busy-disabled
+  // with their normal label while a job runs.
+  const [indexingFile, setIndexingFile] = useState(null);
   const [message, setMessage] = useState('');
   const [pollingActive, setPollingActive] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -65,6 +69,7 @@ const DocumentManager = () => {
         if (!status) {
           setStatusMessage('Error checking indexing status');
           setPollingActive(false);
+          setIndexingFile(null);
           return;
         }
 
@@ -73,10 +78,14 @@ const DocumentManager = () => {
           setStatusMessage(`Indexing failed: ${status.error}`);
           await fetchDocuments();
           setPollingActive(false);
+          setIndexingFile(null);
           return;
         }
 
         if (status.isIndexing) {
+          // The backend reports which file the job is on; keep the local
+          // choice if the payload doesn't name one.
+          setIndexingFile((prev) => status.currentFile || prev);
           setStatusMessage(`Indexing in progress: ${status.progress}%`);
         } else if (status.lastIndexed) {
           // Indexing is complete — refresh the list and stop polling now;
@@ -85,15 +94,18 @@ const DocumentManager = () => {
           await fetchDocuments();
           setStatusMessage(`Indexing completed at ${new Date(status.lastIndexed).toLocaleTimeString()}`);
           setPollingActive(false);
+          setIndexingFile(null);
           clearStatusSoon();
         } else {
           // Not indexing and nothing indexed — nothing left to poll for
           setPollingActive(false);
+          setIndexingFile(null);
         }
       } catch (error) {
         console.error('Error polling status:', error);
         setStatusMessage('Error checking indexing status');
         setPollingActive(false);
+        setIndexingFile(null);
       }
     }, 2000);
 
@@ -119,6 +131,7 @@ const DocumentManager = () => {
       try {
         const response = await api.getIndexingStatus();
         if (response.status.isIndexing) {
+          setIndexingFile(response.status.currentFile || null);
           pollIndexingStatus();
         }
       } catch (error) {
@@ -131,8 +144,9 @@ const DocumentManager = () => {
 
   const handleIndexDocument = async (filename) => {
     setIndexingStatus(prev => ({ ...prev, [filename]: 'indexing' }));
+    setIndexingFile(filename);
     setMessage(`Starting indexing for ${filename}...`);
-    
+
     try {
       await api.indexDocument(filename);
       setMessage(`Indexing process started for ${filename}`);
@@ -142,6 +156,7 @@ const DocumentManager = () => {
       console.error('Error indexing document:', error);
       setMessage(`Error: ${error.response?.data?.message || 'Failed to start indexing'}`);
       setIndexingStatus(prev => ({ ...prev, [filename]: 'failed' }));
+      setIndexingFile(null);
     }
   };
 
@@ -177,7 +192,7 @@ const DocumentManager = () => {
                       disabled={pollingActive || indexingStatus[doc.filename] === 'indexing'}
                       className="kb-button index-button"
                     >
-                      {indexingStatus[doc.filename] === 'indexing' || pollingActive
+                      {indexingStatus[doc.filename] === 'indexing' || indexingFile === doc.filename
                         ? 'Indexing...'
                         : 'Index Document'}
                     </button>

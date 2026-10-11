@@ -5,6 +5,9 @@ const { HttpError } = require('../middleware/errors');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
+// bcrypt only uses the first 72 bytes — a longer password would silently
+// truncate, so any login sharing the 72-byte prefix would match.
+const MAX_PASSWORD_BYTES = 72;
 const TOKEN_TTL = '12h';
 // Compared against when the account doesn't exist so login timing doesn't
 // reveal whether an email is registered.
@@ -32,6 +35,9 @@ exports.signup = async (req, res) => {
   }
   if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
     throw new HttpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+    throw new HttpError(400, `Password must be at most ${MAX_PASSWORD_BYTES} bytes`);
   }
 
   const existing = await User.findOne({ email });

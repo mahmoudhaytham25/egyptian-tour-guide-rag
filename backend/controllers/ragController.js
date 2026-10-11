@@ -22,6 +22,8 @@ const MODEL_SERVER_BUDGET_MS = QUERY_TIMEOUT_MS - 10000;
 const INDEX_TIMEOUT_MS = 10000;
 const INDEX_STATUS_TIMEOUT_MS = 5000;
 const MAX_QUERY_LENGTH = 2000;
+// Exported so server.js can keep requestTimeout comfortably above this.
+exports.QUERY_TIMEOUT_MS = QUERY_TIMEOUT_MS;
 const DEFAULT_DOCUMENT = 'egyptian_history';
 const SAFE_BASENAME_RE = /^(?=.*[A-Za-z0-9])[A-Za-z0-9._-]+$/;
 
@@ -51,6 +53,16 @@ function safePdfFilename(filename) {
 exports.uploadPdf = (req, res) => {
   if (!req.file) {
     throw new HttpError(400, 'No file uploaded');
+  }
+
+  // Re-uploading a file mid-index is a cross-service race: the in-flight job
+  // reads the old bytes and, on completion, writes an index built from the
+  // pre-re-upload PDF — which then shows as freshly indexed. Refuse it.
+  if (indexingStatus.isIndexing && indexingStatus.currentFile === req.file.filename) {
+    throw new HttpError(
+      409,
+      `${req.file.filename} is currently being indexed — wait for indexing to finish before re-uploading`
+    );
   }
 
   // Log identifiers/sizes only — not the raw file object.
@@ -121,12 +133,21 @@ exports.indexDocument = async (req, res) => {
         (error.response.data.error || error.response.data.message)) ||
       error.message;
     const status = error.response && error.response.status;
+    // Axios timeout (ECONNABORTED, no response) — same 504 mapping as /query;
+    // without this it would masquerade as a 502 "unreachable".
+    if (error.code === 'ECONNABORTED' ||
+        (error.message && error.message.toLowerCase().includes('timeout'))) {
+      throw new HttpError(504, 'Model server timed out accepting the indexing job');
+    }
     if (status === 409) {
       // A job is already running over there — reflect it locally.
       indexingStatus.isIndexing = true;
       throw new HttpError(409, String(detail));
     }
-    if (status && status < 500) {
+    // Only these client errors are safe to pass through — an upstream 401/403
+    // (bad INTERNAL_API_TOKEN) would read to the browser as the user's own
+    // session expiring and force a logout.
+    if (status === 400 || status === 404) {
       throw new HttpError(status, String(detail));
     }
     if (!error.response) {
@@ -172,6 +193,8 @@ async function pollModelServerIndexStatus() {
         indexingStatus.isIndexing = true;
         indexingStatus.jobId = data.job_id || indexingStatus.jobId;
         indexingStatus.currentFile = data.filename || indexingStatus.currentFile;
+        indexingStatus.progress =
+          typeof data.progress === 'number' ? data.progress : indexingStatus.progress;
         indexingStatus.error = null;
         break;
       case 'done': {
@@ -196,15 +219,23 @@ async function pollModelServerIndexStatus() {
           data.error || 'Indexing failed on model server';
         break;
       case 'idle':
+        // Model server has no job record (e.g. after a restart) — clear any
+        // stale error/message alongside the running flag.
         indexingStatus.isIndexing = false;
+        indexingStatus.error = null;
+        indexingStatus.message = null;
         break;
       default:
         break;
     }
   } catch (error) {
     // A failed poll must not break the status endpoint — report the last
-    // known state instead.
-    console.warn('Could not poll model-server indexing status:', error.message);
+    // known state instead. Log the HTTP status too: a persistent 401 (bad
+    // INTERNAL_API_TOKEN) is otherwise invisible and leaves isIndexing stuck.
+    console.warn(
+      'Could not poll model-server indexing status:',
+      error.response ? `HTTP ${error.response.status}` : error.message
+    );
   }
 }
 
@@ -233,10 +264,15 @@ exports.queryRag = async (req, res) => {
   }
 
   // Optional target document — a safe PDF basename without the extension.
+  // Missing/null/"" all mean "default corpus" (matching the model server);
+  // a non-string or over-long value is a 400 rather than an upstream 502.
   let documentName = DEFAULT_DOCUMENT;
-  if (body.document !== undefined && body.document !== null) {
-    const doc = path.basename(String(body.document));
-    if (doc !== String(body.document) || !SAFE_BASENAME_RE.test(doc)) {
+  if (body.document !== undefined && body.document !== null && body.document !== '') {
+    if (typeof body.document !== 'string' || body.document.length > 255) {
+      throw new HttpError(400, 'Invalid document name');
+    }
+    const doc = path.basename(body.document);
+    if (doc !== body.document || !SAFE_BASENAME_RE.test(doc)) {
       throw new HttpError(400, 'Invalid document name');
     }
     documentName = doc.replace(/\.pdf$/i, '');
@@ -327,9 +363,12 @@ exports.queryRag = async (req, res) => {
 
   if (rawData && rawData.response && typeof rawData.response === 'object') {
     const response = rawData.response;
-    plainTextAnswer = typeof response.answer === 'string'
+    // A non-string/empty answer (e.g. a safety-blocked response serialized as
+    // null upstream) must not be persisted or shown — never JSON.stringify it
+    // into the literal string "null".
+    plainTextAnswer = typeof response.answer === 'string' && response.answer.trim()
       ? response.answer
-      : JSON.stringify(response.answer, null, 2);
+      : "I'm sorry, I couldn't generate a proper response. Please try again.";
     sources = response.sources || [];
     enhancedQuery = response.enhanced_query || null;
     originalQuery = response.original_query || null;

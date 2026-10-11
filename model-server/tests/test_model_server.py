@@ -255,6 +255,26 @@ class TestIndexAsync:
         assert resp.status_code == 200
         assert resp.get_json() == {"status": "idle"}
 
+    def test_thread_start_failure_releases_lock_and_500s(self, client, monkeypatch):
+        (client.data_dir / "doc.pdf").write_text("pdf bytes")
+
+        class _UnstartableThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("cannot start thread")
+
+        monkeypatch.setattr(model_server.threading, "Thread", _UnstartableThread)
+        resp = client.post("/index", json={"filename": "doc.pdf"}, headers=AUTH)
+        assert resp.status_code == 500
+
+        # The lock was handed back — a follow-up job can start, and the
+        # job state reports the failure instead of stuck "indexing".
+        assert not model_server.indexing_lock.locked()
+        status = client.get("/index/status", headers=AUTH).get_json()
+        assert status["status"] == "error"
+
     def test_failed_index_reports_error_and_releases_lock(self, client, monkeypatch):
         (client.data_dir / "doc.pdf").write_text("pdf bytes")
 

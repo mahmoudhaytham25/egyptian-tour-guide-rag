@@ -408,7 +408,9 @@ describe("ChatInterface", () => {
       screen.queryByText("No conversations yet.")
     ).not.toBeInTheDocument();
 
-    // Retry refetches; the recovered list renders normally.
+    // Retry refetches; the recovered list renders normally. A retry never
+    // auto-opens a conversation — the user picks one themselves (an
+    // auto-open here could clobber a "+ New chat" pane).
     api.getConversations.mockResolvedValue(CONVERSATIONS);
     api.getConversation.mockImplementation(async (id) =>
       id === "c1" ? C1_MESSAGES : C2_MESSAGES
@@ -416,10 +418,13 @@ describe("ChatInterface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByText("First chat")).toBeInTheDocument();
-    expect(await screen.findByText("First question")).toBeInTheDocument();
     expect(
       screen.queryByText("Could not load conversations.")
     ).not.toBeInTheDocument();
+    expect(api.getConversation).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("First chat"));
+    expect(await screen.findByText("First question")).toBeInTheDocument();
   });
 
   it("loads a conversation's messages when its sidebar item is clicked", async () => {
@@ -712,5 +717,184 @@ describe("ChatInterface", () => {
     // expected noise; what matters is the session teardown.
     fireEvent.click(screen.getByRole("button", { name: "Logout" }));
     expect(api.logout).toHaveBeenCalled();
+  });
+
+  it("recovers from a stale conversationId by creating a fresh conversation", async () => {
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockImplementation(async (id) =>
+      id === "c1" ? C1_MESSAGES : C2_MESSAGES
+    );
+    api.askQuestion
+      .mockRejectedValueOnce({
+        response: {
+          status: 404,
+          data: { message: "Conversation not found" },
+        },
+      })
+      .mockResolvedValueOnce({ answer: "recovered" });
+    api.createConversation.mockResolvedValue({ _id: "conv-fresh" });
+
+    renderChat();
+    await screen.findByText("First question");
+    expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBe("c1");
+
+    typeQuestion("still there?");
+    clickSend();
+    await flushPromises();
+
+    // First attempt went out with the stale id; the retry created a fresh
+    // conversation and attached its id instead of 404ing forever.
+    expect(api.askQuestion).toHaveBeenNthCalledWith(1, {
+      query: "still there?",
+      conversationId: "c1",
+      document: "egyptian_history",
+    });
+    expect(api.createConversation).toHaveBeenCalledWith({
+      title: "still there?",
+    });
+    expect(api.askQuestion).toHaveBeenNthCalledWith(2, {
+      query: "still there?",
+      conversationId: "conv-fresh",
+      document: "egyptian_history",
+    });
+    expect(api.askQuestion).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("recovered")).toBeInTheDocument();
+    expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBe(
+      "conv-fresh"
+    );
+  });
+
+  it("does not activate a conversation whose message fetch fails", async () => {
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockRejectedValue({ response: { status: 404 } });
+
+    renderChat();
+    expect(await screen.findByText("First chat")).toBeInTheDocument();
+
+    // The dead id is neither activated nor persisted — a send must not
+    // attach it (it would 404 every time).
+    expect(
+      document.querySelector(".conversation-item.active")
+    ).toBeNull();
+    expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBeNull();
+
+    typeQuestion("fresh start");
+    clickSend();
+    await flushPromises();
+
+    expect(api.createConversation).toHaveBeenCalledWith({
+      title: "fresh start",
+    });
+    expect(api.askQuestion).toHaveBeenCalledWith({
+      query: "fresh start",
+      conversationId: "conv-new",
+      document: "egyptian_history",
+    });
+  });
+
+  it("shows a non-conversation 400 without disabling persistence", async () => {
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    api.getConversation.mockImplementation(async (id) =>
+      id === "c1" ? C1_MESSAGES : C2_MESSAGES
+    );
+    api.askQuestion.mockRejectedValueOnce({
+      response: {
+        status: 400,
+        data: { message: "Question is too long (max 2000 characters)" },
+      },
+    });
+
+    renderChat();
+    await screen.findByText("First question");
+
+    typeQuestion("too long");
+    clickSend();
+    await flushPromises();
+
+    // A labeled non-conversation 400 is shown to the user as-is — no
+    // silent plain-query retry.
+    expect(
+      await screen.findByText("Question is too long (max 2000 characters)")
+    ).toBeInTheDocument();
+    expect(api.askQuestion).toHaveBeenCalledTimes(1);
+
+    // Persistence stays enabled — the next send still attaches the id.
+    api.askQuestion.mockResolvedValueOnce({ answer: "ok" });
+    typeQuestion("next");
+    clickSend();
+    await flushPromises();
+    expect(api.askQuestion).toHaveBeenLastCalledWith({
+      query: "next",
+      conversationId: "c1",
+      document: "egyptian_history",
+    });
+  });
+
+  it("does not auto-open a conversation when a retry resolves after '+ New chat'", async () => {
+    api.getConversations.mockRejectedValueOnce({
+      response: { status: 500 },
+    });
+
+    renderChat();
+    expect(
+      await screen.findByText("Could not load conversations.")
+    ).toBeInTheDocument();
+
+    // The user opts for a fresh empty pane, then retries the sidebar.
+    fireEvent.click(screen.getByRole("button", { name: "+ New chat" }));
+    api.getConversations.mockResolvedValue(CONVERSATIONS);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // The list recovers, but nothing is auto-opened over their empty pane.
+    expect(await screen.findByText("First chat")).toBeInTheDocument();
+    expect(api.getConversation).not.toHaveBeenCalled();
+    expect(
+      document.querySelector(".conversation-item.active")
+    ).toBeNull();
+    expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBeNull();
+  });
+
+  it("resets the corpus selection when the picked document is no longer indexed", async () => {
+    renderChat();
+    await screen.findByText("No conversations yet.");
+
+    const select = await screen.findByLabelText("Document to answer from");
+    await screen.findByRole("option", { name: "Alexandria Guide.pdf" });
+    fireEvent.change(select, { target: { value: "alexandria_guide" } });
+    expect(select).toHaveValue("alexandria_guide");
+
+    // The next refresh reports the picked document unindexed — the
+    // selection falls back to the default corpus instead of aiming
+    // /query at a document the backend would reject.
+    api.getDocuments.mockResolvedValue({
+      documents: [DOCUMENTS[0], { ...DOCUMENTS[1], indexed: false }],
+    });
+    fireEvent.focus(select);
+    await flushPromises();
+
+    expect(select).toHaveValue("egyptian_history");
+  });
+
+  it("does not refetch the sidebar after a plain /query send", async () => {
+    api.getConversations.mockRejectedValue({ response: { status: 404 } });
+    renderChat();
+    await screen.findByText("No conversations yet.");
+    expect(api.getConversations).toHaveBeenCalledTimes(1);
+
+    typeQuestion("Who built the pyramids?");
+    clickSend();
+    await flushPromises();
+
+    expect(api.askQuestion).toHaveBeenCalledTimes(1);
+    // Nothing persisted — refreshing the list would be a wasted fetch.
+    expect(api.getConversations).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps the composer at the backend's 2000-character limit", async () => {
+    renderChat();
+    await screen.findByText("No conversations yet.");
+    expect(
+      screen.getByPlaceholderText("Type your message...")
+    ).toHaveAttribute("maxLength", "2000");
   });
 });

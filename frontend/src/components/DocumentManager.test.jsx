@@ -179,6 +179,60 @@ describe("DocumentManager", () => {
     ).toBeInTheDocument();
   });
 
+  it("labels only the document actually indexing as 'Indexing...'", async () => {
+    api.getDocuments.mockResolvedValue({
+      documents: [
+        { id: "a", filename: "a.pdf", indexed: false },
+        { id: "b", filename: "b.pdf", indexed: false },
+      ],
+    });
+
+    render(<DocumentManager />);
+    const buttons = await screen.findAllByRole("button", {
+      name: "Index Document",
+    });
+    fireEvent.click(buttons[0]);
+    await flushPromises();
+
+    expect(api.indexDocument).toHaveBeenCalledWith("a.pdf");
+    const indexingButton = screen.getByRole("button", {
+      name: "Indexing...",
+    });
+    expect(indexingButton).toBeDisabled();
+    expect(indexingButton.closest("li")).toHaveTextContent("a.pdf");
+    // The other document is busy-disabled while a job runs, but keeps its
+    // normal label — it's not the one being indexed.
+    const idleButton = screen.getByRole("button", { name: "Index Document" });
+    expect(idleButton).toBeDisabled();
+    expect(idleButton.closest("li")).toHaveTextContent("b.pdf");
+  });
+
+  it("labels the in-flight document when indexing is already running at mount", async () => {
+    api.getDocuments.mockResolvedValue({
+      documents: [
+        { id: "a", filename: "a.pdf", indexed: false },
+        { id: "b", filename: "b.pdf", indexed: false },
+      ],
+    });
+    api.getIndexingStatus.mockResolvedValue({
+      status: { isIndexing: true, progress: 10, currentFile: "b.pdf" },
+    });
+
+    render(<DocumentManager />);
+    await flushPromises();
+
+    // currentFile identifies the job's target — only that row gets the
+    // 'Indexing...' label even though both buttons are disabled.
+    const indexingButton = screen.getByRole("button", {
+      name: "Indexing...",
+    });
+    expect(indexingButton).toBeDisabled();
+    expect(indexingButton.closest("li")).toHaveTextContent("b.pdf");
+    const idleButton = screen.getByRole("button", { name: "Index Document" });
+    expect(idleButton).toBeDisabled();
+    expect(idleButton.closest("li")).toHaveTextContent("a.pdf");
+  });
+
   it("refreshes the list on completion, then stops polling and clears the status", async () => {
     api.getIndexingStatus
       .mockResolvedValueOnce({ status: { isIndexing: true, progress: 90 } })

@@ -78,6 +78,18 @@ describe("DocumentUploader", () => {
     ).toBeInTheDocument();
   });
 
+  it("falls back to the chosen file's name when the response has no filename", async () => {
+    api.uploadDocument.mockResolvedValue({ success: true });
+    render(<DocumentUploader />);
+
+    selectFile(pdfFile());
+    fireEvent.click(screen.getByRole("button", { name: "Upload Document" }));
+
+    expect(
+      await screen.findByText("Document uploaded successfully: egypt.pdf")
+    ).toBeInTheDocument();
+  });
+
   it("shows the server-provided error message on failure", async () => {
     api.uploadDocument.mockRejectedValue({
       response: { data: { message: "Only PDF files are allowed!" } },
