@@ -28,6 +28,12 @@ GENERATE_TIMEOUT_SECONDS = 120
 MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 2.0
 
+# Sampling defaults carried over from the old model-level generation_config —
+# the unified google-genai SDK has no model-level config, so these ride along
+# on every request's GenerateContentConfig.
+DEFAULT_TOP_P = 0.95
+DEFAULT_TOP_K = 40
+
 class LLMModel:
     def __init__(self, model_name="gemini-3.8-flash"):
         """
@@ -38,7 +44,7 @@ class LLMModel:
         """
         self.model_name = model_name
         self.model_loaded = False
-        self.api_key = None
+        self.client = None
 
     def load_model(self):
         """
@@ -46,23 +52,11 @@ class LLMModel:
         """
         try:
             # Shared configuration — raises a clear error when
-            # GEMINI_API_KEY is missing.
-            self.api_key = configure_gemini()
-
-            # google-generativeai must be installed (see requirements.txt)
-            import google.generativeai as genai
+            # GEMINI_API_KEY is missing. Returns the shared google-genai
+            # client used for every generate_content call.
+            self.client = configure_gemini()
 
             logger.info(f"Initializing Gemini API with model: {self.model_name}")
-
-            # Initialize the model
-            self.model = genai.GenerativeModel(self.model_name,
-                generation_config={
-                    "temperature": 0.2,  # Lower temperature for RAG
-                    "top_p": 0.95,
-                    "top_k": 40,
-                    "max_output_tokens": 1024,
-                }
-            )
 
             self.model_loaded = True
             logger.info("Gemini API initialized successfully")
@@ -96,18 +90,26 @@ class LLMModel:
             if not self.load_model():
                 raise RuntimeError("Failed to load the LLM model")
 
+        from google.genai import types
+
         delay = INITIAL_BACKOFF_SECONDS
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 # Generate content with an explicit per-request timeout so a
                 # hung API call can't tie up a worker thread indefinitely
-                response = self.model.generate_content(
-                    prompt,
-                    generation_config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens
-                    },
-                    request_options={"timeout": GENERATE_TIMEOUT_SECONDS}
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                        top_p=DEFAULT_TOP_P,
+                        top_k=DEFAULT_TOP_K,
+                        # HttpOptions.timeout is in MILLISECONDS
+                        http_options=types.HttpOptions(
+                            timeout=GENERATE_TIMEOUT_SECONDS * 1000
+                        ),
+                    ),
                 )
 
                 # Return the text response

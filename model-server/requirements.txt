@@ -2,8 +2,9 @@
 flask>=3.1.3
 gunicorn>=21.0
 python-dotenv>=1.2.4
-# >=0.4.0 for request_options timeout support on generate/embed calls
-google-generativeai>=0.4.0
+# Unified Gemini SDK (replaces the deprecated google-generativeai);
+# per-request timeouts go through types.HttpOptions in milliseconds
+google-genai>=2.0.0
 pandas>=1.3.0
 numpy>=1.20.0
 tqdm>=4.62.0

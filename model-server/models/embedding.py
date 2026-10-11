@@ -59,7 +59,7 @@ class EmbeddingModel:
         """
         self.model_name = model_name
         self.model_loaded = False
-        self.api_key = None
+        self.client = None
 
     def load_model(self):
         """
@@ -72,8 +72,9 @@ class EmbeddingModel:
         try:
             # Shared configuration — raises a clear error when
             # GEMINI_API_KEY is missing instead of falling through to a
-            # chain of dead fallback branches.
-            self.api_key = configure_gemini()
+            # chain of dead fallback branches. Returns the shared
+            # google-genai client used for every embed_content call.
+            self.client = configure_gemini()
 
             logger.info(f"Configuring Gemini embeddings API with model: {self.model_name}")
 
@@ -92,19 +93,27 @@ class EmbeddingModel:
         Returns:
             list: List of embedding vectors (one per input text)
         """
-        import google.generativeai as genai
+        from google.genai import types
 
         delay = INITIAL_BACKOFF_SECONDS
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                result = genai.embed_content(
+                result = self.client.models.embed_content(
                     model=self.model_name,
-                    content=texts,
-                    task_type=task_type,
-                    output_dimensionality=OUTPUT_DIMENSIONALITY,
-                    request_options={"timeout": EMBED_TIMEOUT_SECONDS},
+                    contents=texts,
+                    config=types.EmbedContentConfig(
+                        # google-genai spells task types as enum values
+                        # (RETRIEVAL_DOCUMENT/RETRIEVAL_QUERY) — normalize so
+                        # callers passing the old lowercase strings still work
+                        task_type=task_type.upper(),
+                        output_dimensionality=OUTPUT_DIMENSIONALITY,
+                        # HttpOptions.timeout is in MILLISECONDS
+                        http_options=types.HttpOptions(
+                            timeout=EMBED_TIMEOUT_SECONDS * 1000
+                        ),
+                    ),
                 )
-                return result["embedding"]
+                return [embedding.values for embedding in result.embeddings]
             except Exception as e:
                 # Non-retryable errors (400-class rejections) fail
                 # identically on every attempt — surface them immediately
@@ -141,7 +150,8 @@ class EmbeddingModel:
             batch_size (int): Texts per API request (clamped to the API limit
                 of 100)
             task_type (str): Gemini task type — "retrieval_document" for
-                indexed chunks, "retrieval_query" for queries
+                indexed chunks, "retrieval_query" for queries (normalized to
+                the SDK's uppercase enum values in _embed_batch)
 
         Returns:
             numpy.ndarray: Array of L2-normalized embeddings, or None on failure

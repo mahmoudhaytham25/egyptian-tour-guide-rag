@@ -2,7 +2,7 @@
 Tests for model_server.py Flask routes.
 
 model_server is imported with INTERNAL_API_TOKEN set and a stubbed
-google.generativeai module, so importing it (which runs
+google.genai module, so importing it (which runs
 initialize_models) can never hit the network. The generator and the
 embedding model are then replaced with fakes per test, and all
 filesystem lookups (data dir, vector-store dir) are redirected to a
@@ -19,22 +19,56 @@ import pytest
 # Required env — model_server refuses to import without it
 os.environ["INTERNAL_API_TOKEN"] = "test-internal-token"
 
-# Stub google.generativeai before anything imports it so a configured
-# GEMINI_API_KEY in the test environment still can't reach the network
-_fake_genai = types.ModuleType("google.generativeai")
-_fake_genai.configure = lambda *args, **kwargs: None
+# Stub google.genai before anything imports it so a configured
+# GEMINI_API_KEY in the test environment still can't reach the network.
+# The real google-genai package may be installed — this stub only keeps
+# client construction and API calls offline.
+_fake_genai = types.ModuleType("google.genai")
 
 
-class _FakeGenerativeModel:
-    def __init__(self, *args, **kwargs):
-        pass
+class _FakeModelsApi:
+    """client.models stand-in — every API call must fail loudly in tests."""
+
+    def embed_content(self, *args, **kwargs):
+        raise AssertionError("Gemini calls must not run in tests")
 
     def generate_content(self, *args, **kwargs):
         raise AssertionError("Gemini calls must not run in tests")
 
 
-_fake_genai.GenerativeModel = _FakeGenerativeModel
-sys.modules["google.generativeai"] = _fake_genai
+class _FakeClient:
+    """genai.Client stand-in — constructible offline, API calls fail."""
+    def __init__(self, *args, **kwargs):
+        self.models = _FakeModelsApi()
+
+
+class _FakeConfig:
+    """kwargs-bag stand-in for the google.genai.types config objects."""
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+_fake_types = types.ModuleType("google.genai.types")
+_fake_types.HttpOptions = _FakeConfig
+_fake_types.EmbedContentConfig = _FakeConfig
+_fake_types.GenerateContentConfig = _FakeConfig
+
+_fake_genai.Client = _FakeClient
+_fake_genai.types = _fake_types
+
+sys.modules["google.genai"] = _fake_genai
+sys.modules["google.genai.types"] = _fake_types
+
+# `from google import genai` resolves the parent package first, so make sure
+# a `google` module exists and its `genai` attribute points at the stub —
+# this keeps the import working whether or not the real SDK is installed.
+try:
+    import google
+except ImportError:
+    google = types.ModuleType("google")
+    google.__path__ = []
+    sys.modules["google"] = google
+google.genai = _fake_genai
 
 import model_server
 
