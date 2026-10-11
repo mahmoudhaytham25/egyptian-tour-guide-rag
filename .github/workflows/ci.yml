@@ -247,3 +247,78 @@ jobs:
       - name: Run Playwright tests
         working-directory: frontend
         run: npx playwright test
+
+  # Path-filtered deploy trigger: diffs the push range, then hands off to
+  # CodeBuild, which clones the repo, builds+pushes each changed service
+  # image, and redeploys the EC2 box via SSM (all inside the buildspec).
+  # Auth is OIDC — the role (AWS_DEPLOY_ROLE_ARN secret) is created by the
+  # infrastructure/ CDK app and only assumable from this repo's main branch.
+  deploy:
+    if: github.event_name == 'push'
+    needs: [backend-tests, backend-migrations, model-server-tests, frontend-tests, compose-smoke, frontend-e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2 # need HEAD + the push's base commit for the diff
+
+      - name: Detect changed service directories
+        id: changes
+        run: |
+          before="${{ github.event.before }}"
+          # All-zero 'before' (first push to a branch) or missing object —
+          # deploy everything.
+          if [ "$before" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$before" 2>/dev/null; then
+            echo "services=backend frontend model-server" >> "$GITHUB_OUTPUT"
+          else
+            svcs=$(git diff --name-only "$before" "$GITHUB_SHA" \
+              | cut -d/ -f1 | grep -E '^(backend|frontend|model-server)$' | sort -u | tr '\n' ' ' || true)
+            echo "services=$svcs" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The AWS side only exists once the infrastructure/ CDK app is
+      # deployed and the 3 repo entries are set — until then, skip instead
+      # of failing on missing config (a service-code push is still a
+      # green CI run without a deploy target).
+      - name: Check deploy configuration
+        id: deploycfg
+        env:
+          ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          REGION: ${{ vars.AWS_REGION }}
+          PROJECT: ${{ vars.CODEBUILD_PROJECT }}
+        run: |
+          if [ -z "$ROLE_ARN" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "AWS deploy not configured (needs AWS_DEPLOY_ROLE_ARN secret + AWS_REGION/CODEBUILD_PROJECT vars) — skipping"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.changes.outputs.services != '' && steps.deploycfg.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Trigger deploy build
+        if: steps.changes.outputs.services != '' && steps.deploycfg.outputs.configured == 'true'
+        run: |
+          id=$(aws codebuild start-build \
+            --project-name "${{ vars.CODEBUILD_PROJECT }}" \
+            --environment-variables-override \
+              name=CHANGED_SERVICES,value="${{ steps.changes.outputs.services }}" \
+              name=IMAGE_TAG,value="$GITHUB_SHA" \
+            --query 'build.id' --output text)
+          # Fire-and-forget: verdict lives on the build itself.
+          {
+            echo "deploy build started: \`$id\`"
+            echo "[build history](https://${{ vars.AWS_REGION }}.console.aws.amazon.com/codesuite/codebuild/projects/${{ vars.CODEBUILD_PROJECT }}/history)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip — no service code changed
+        if: steps.changes.outputs.services == ''
+        run: echo "push touched no backend/, frontend/ or model-server/ files — nothing to deploy"

@@ -81,6 +81,21 @@ npm run migrate:create -- my-change   # scaffold a new migration
 
 **Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 
+## Deployment — AWS (CDK)
+
+`infrastructure/` contains a complete IaC setup for running the app on AWS: one EC2 instance pulling pre-built images from ECR, deployed by a path-filtered CodeBuild pipeline. Four CDK stacks (`ecr`, `compute`, `deploy`, `ci`) are wired from `bin/app.ts`.
+
+```
+push to main → tests → diff paths → CodeBuild builds changed images → ECR → SSM redeploy on EC2
+```
+
+- GitHub Actions authenticates via **OIDC** — no AWS keys stored in secrets
+- `JWT_SECRET` is generated into **Secrets Manager**; the box renders `.env` at boot — plaintext secrets never enter templates or state
+- `docker-compose.prod.yml` mirrors the dev stack but pulls images instead of building
+- The CI `deploy` job skips cleanly until the three GitHub entries are set — no AWS account needed to keep CI green
+
+Full design, deploy steps and cost notes: [infrastructure/README.md](infrastructure/README.md)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

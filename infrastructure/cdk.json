@@ -1,0 +1,10 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "context": {
+    "@aws-cdk/core:defaultCrossStackReferences": "weak"
+  },
+  "watch": {
+    "include": ["lib/**", "bin/**", "assets/**"],
+    "exclude": ["cdk.out"]
+  }
+}
