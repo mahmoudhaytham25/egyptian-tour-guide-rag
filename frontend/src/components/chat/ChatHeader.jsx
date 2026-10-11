@@ -1,7 +1,14 @@
 import { Link } from "react-router-dom";
+import DocumentSelector from "./DocumentSelector";
 import icon from "../../Assets/Images/pharaoh-icon.png";
 
-const ChatHeader = ({ onLogout }) => (
+const ChatHeader = ({
+  onLogout,
+  documents,
+  selectedDocument,
+  onSelectDocument,
+  onRefreshDocuments,
+}) => (
   <header className="chat-header">
     <div className="chat-header-brand">
       <img src={icon} alt="" className="chat-header-icon" />
@@ -11,6 +18,12 @@ const ChatHeader = ({ onLogout }) => (
       </div>
     </div>
     <div className="chat-header-actions">
+      <DocumentSelector
+        documents={documents}
+        value={selectedDocument}
+        onChange={onSelectDocument}
+        onRefresh={onRefreshDocuments}
+      />
       <Link className="chat-nav-link" to="/documents">
         Knowledge Base
       </Link>

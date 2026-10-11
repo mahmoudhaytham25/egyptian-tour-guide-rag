@@ -31,7 +31,13 @@ const ChatInterface = () => {
         />
 
         <div className="chat-container">
-          <ChatHeader onLogout={chat.handleLogout} />
+          <ChatHeader
+            onLogout={chat.handleLogout}
+            documents={chat.documents}
+            selectedDocument={chat.selectedDocument}
+            onSelectDocument={chat.setSelectedDocument}
+            onRefreshDocuments={chat.refreshDocuments}
+          />
 
           <MessageList
             messages={chat.messages}

@@ -74,7 +74,7 @@ describe("api service", () => {
       expect(createCalls[0]).toEqual(
         expect.objectContaining({
           baseURL: "http://localhost:3001/api",
-          timeout: 130000,
+          timeout: 320000,
           headers: { "Content-Type": "application/json" },
         })
       );
@@ -257,13 +257,14 @@ describe("api service", () => {
       const data = await api.uploadDocument(file);
 
       expect(axiosInstance.post).toHaveBeenCalledTimes(1);
-      const [url, body] = axiosInstance.post.mock.calls[0];
+      const [url, body, config] = axiosInstance.post.mock.calls[0];
       expect(url).toBe("/upload");
       expect(body).toBeInstanceOf(FormData);
       expect(body.get("pdf")).toBe(file);
-      // No manual Content-Type header — axios derives the multipart
-      // boundary itself when handed FormData.
-      expect(axiosInstance.post.mock.calls[0]).toHaveLength(2);
+      // The instance default "Content-Type: application/json" is cleared so
+      // the browser sets multipart/form-data + boundary — without this,
+      // axios JSON-serializes the FormData and multer sees no file (400).
+      expect(config.headers["Content-Type"]).toBeUndefined();
       expect(data).toEqual({ filename: "doc.pdf" });
     });
 
@@ -295,6 +296,15 @@ describe("api service", () => {
       expect(axiosInstance.post).toHaveBeenCalledWith("/query", {
         query: "q",
         conversationId: "c1",
+      });
+    });
+
+    it("askQuestion forwards an optional document field", async () => {
+      axiosInstance.post.mockResolvedValue({ data: { answer: "42" } });
+      await api.askQuestion({ query: "q", document: "alexandria_guide" });
+      expect(axiosInstance.post).toHaveBeenCalledWith("/query", {
+        query: "q",
+        document: "alexandria_guide",
       });
     });
 

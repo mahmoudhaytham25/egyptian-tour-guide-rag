@@ -131,6 +131,55 @@
   color: #fff;
 }
 
+/* Corpus picker — which indexed document /query runs against */
+.doc-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.doc-picker-label {
+  font-size: 0.68rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--sand);
+  white-space: nowrap;
+}
+
+.doc-picker-select {
+  max-width: 190px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: var(--cream);
+  font-size: 0.82rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  transition: all 0.2s ease;
+}
+
+.doc-picker-select:hover,
+.doc-picker-select:focus-visible {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: var(--gold);
+  color: #fff;
+  outline: none;
+}
+
+/* Options render in the native dropdown — force a light scheme so the
+   select's cream-on-dark styling doesn't leak into unreadable entries. */
+.doc-picker-select option {
+  color: var(--ink);
+  background: #fff;
+}
+
+.doc-picker-select option:disabled {
+  color: var(--muted-light);
+}
+
 /* ------------------------------------------------------------------ */
 /* Messages                                                            */
 /* ------------------------------------------------------------------ */
@@ -712,5 +761,13 @@
   .chat-header-text h2 {
     font-size: 1.05rem;
     white-space: normal;
+  }
+
+  .doc-picker-label {
+    display: none;
+  }
+
+  .doc-picker-select {
+    max-width: 130px;
   }
 }

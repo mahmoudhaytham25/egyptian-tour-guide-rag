@@ -12,6 +12,7 @@ vi.mock("../services/api", () => ({
     addMessageToConversation: vi.fn(),
     deleteConversation: vi.fn(),
     askQuestion: vi.fn(),
+    getDocuments: vi.fn(),
     logout: vi.fn(),
     isAuthenticated: vi.fn(),
     getAuthToken: vi.fn(),
@@ -56,6 +57,27 @@ const C2_MESSAGES = {
   ],
 };
 
+const DOCUMENTS = [
+  {
+    id: "egyptian_history",
+    filename: "egyptian_history.pdf",
+    originalName: "egyptian_history.pdf",
+    indexed: true,
+  },
+  {
+    id: "alexandria_guide",
+    filename: "alexandria_guide.pdf",
+    originalName: "Alexandria Guide.pdf",
+    indexed: true,
+  },
+  {
+    id: "fresh_upload",
+    filename: "fresh_upload.pdf",
+    originalName: "fresh_upload.pdf",
+    indexed: false,
+  },
+];
+
 // Flush the promise chains inside the component's async handlers without
 // touching (fake) timers — needed between a UI action and its awaited result.
 const flushPromises = () =>
@@ -96,6 +118,7 @@ describe("ChatInterface", () => {
     api.getConversation.mockResolvedValue({ messages: [] });
     api.createConversation.mockResolvedValue({ _id: "conv-new" });
     api.askQuestion.mockResolvedValue({ answer: "ok" });
+    api.getDocuments.mockResolvedValue({ documents: DOCUMENTS });
     // jsdom doesn't implement scrollIntoView.
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
   });
@@ -156,6 +179,7 @@ describe("ChatInterface", () => {
     expect(api.askQuestion).toHaveBeenCalledWith({
       query: "Tell me about the nile",
       conversationId: "conv-new",
+      document: "egyptian_history",
     });
     expect(localStorage.getItem(`conversationId_${USER_ID}`)).toBe("conv-new");
     expect(screen.getByText("Tell me about the nile")).toBeInTheDocument();
@@ -245,6 +269,7 @@ describe("ChatInterface", () => {
     expect(api.askQuestion).toHaveBeenLastCalledWith({
       query: suggestionText,
       conversationId: "conv-new",
+      document: "egyptian_history",
     });
     expect(api.askQuestion).toHaveBeenCalledTimes(2);
   });
@@ -523,10 +548,13 @@ describe("ChatInterface", () => {
     expect(api.askQuestion).toHaveBeenNthCalledWith(1, {
       query: "Trigger the retry",
       conversationId: "conv-new",
+      document: "egyptian_history",
     });
-    // Second attempt drops the conversation payload entirely.
+    // Second attempt drops the conversation payload — the chosen corpus
+    // is kept so the retry can't silently answer from the wrong document.
     expect(api.askQuestion).toHaveBeenNthCalledWith(2, {
       query: "Trigger the retry",
+      document: "egyptian_history",
     });
     expect(api.askQuestion).toHaveBeenCalledTimes(2);
     expect(await screen.findByText("ok")).toBeInTheDocument();
@@ -545,6 +573,7 @@ describe("ChatInterface", () => {
     expect(api.createConversation).not.toHaveBeenCalled();
     expect(api.askQuestion).toHaveBeenCalledWith({
       query: "Who built the pyramids?",
+      document: "egyptian_history",
     });
   });
 
@@ -569,6 +598,110 @@ describe("ChatInterface", () => {
     expect(
       document.querySelector(".conversation-item.active")
     ).toBeNull();
+  });
+
+  it("lists indexed documents in the picker and disables unindexed ones", async () => {
+    renderChat();
+    await screen.findByText("No conversations yet.");
+
+    const select = screen.getByLabelText("Document to answer from");
+    expect(select).toHaveValue("egyptian_history");
+
+    // Indexed documents are selectable; the still-uploading one shows up
+    // disabled so it can't be aimed at /query.
+    expect(
+      await screen.findByRole("option", { name: "egyptian_history.pdf" })
+    ).toBeEnabled();
+    expect(
+      await screen.findByRole("option", { name: "Alexandria Guide.pdf" })
+    ).toBeEnabled();
+    expect(
+      await screen.findByRole("option", {
+        name: "fresh_upload.pdf (not indexed)",
+      })
+    ).toBeDisabled();
+  });
+
+  it("sends the picked document with the next query", async () => {
+    renderChat();
+    await screen.findByText("No conversations yet.");
+
+    // Wait for the fetched options so the select has a matching <option>.
+    await screen.findByRole("option", { name: "Alexandria Guide.pdf" });
+    fireEvent.change(
+      screen.getByLabelText("Document to answer from"),
+      { target: { value: "alexandria_guide" } }
+    );
+
+    typeQuestion("Tell me about the citadel");
+    clickSend();
+    await flushPromises();
+
+    expect(api.askQuestion).toHaveBeenCalledWith({
+      query: "Tell me about the citadel",
+      conversationId: "conv-new",
+      document: "alexandria_guide",
+    });
+  });
+
+  it("applies a document change only to the next send", async () => {
+    let resolveAsk;
+    api.askQuestion.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      })
+    );
+    renderChat();
+    await screen.findByText("No conversations yet.");
+
+    vi.useFakeTimers();
+
+    // A query is in flight against the default corpus when the user
+    // switches the picker — the in-flight request keeps its document.
+    typeQuestion("First query");
+    clickSend();
+    await flushPromises();
+    expect(api.askQuestion).toHaveBeenCalledWith({
+      query: "First query",
+      conversationId: "conv-new",
+      document: "egyptian_history",
+    });
+
+    // Options already rendered during the mount flush — a sync query is
+    // used here because findBy* polling can't advance under fake timers.
+    screen.getByRole("option", { name: "Alexandria Guide.pdf" });
+    fireEvent.change(
+      screen.getByLabelText("Document to answer from"),
+      { target: { value: "alexandria_guide" } }
+    );
+
+    api.askQuestion.mockResolvedValue({ answer: "ok" });
+    await act(async () => {
+      resolveAsk({ answer: "a short ok" });
+    });
+    await flushPromises();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+
+    typeQuestion("Second query");
+    clickSend();
+    await flushPromises();
+    expect(api.askQuestion).toHaveBeenLastCalledWith({
+      query: "Second query",
+      conversationId: "conv-new",
+      document: "alexandria_guide",
+    });
+  });
+
+  it("refetches the document list when the picker is focused", async () => {
+    renderChat();
+    const select = await screen.findByLabelText("Document to answer from");
+    expect(api.getDocuments).toHaveBeenCalledTimes(1);
+
+    fireEvent.focus(select);
+    await flushPromises();
+    expect(api.getDocuments).toHaveBeenCalledTimes(2);
   });
 
   it("calls api.logout from the header logout button", async () => {

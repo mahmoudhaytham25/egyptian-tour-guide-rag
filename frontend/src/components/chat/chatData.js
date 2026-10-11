@@ -20,6 +20,10 @@ import saqqaraStepPyramid from "../../Assets/Images/saqqaraStepPyramid.jpg";
 
 export const DEFAULT_BACKGROUND = pyramids;
 
+/* Fallback corpus: the document /query targets when the user hasn't picked
+   one — mirrors DEFAULT_DOCUMENT in the backend's ragController. */
+export const DEFAULT_DOCUMENT = "egyptian_history";
+
 /* Keywords in the last user message → themed background image.
    Order is semantic: matching uses find() (first match wins), so named
    monuments come first and generic place/era keywords ("giza", "alexandria",

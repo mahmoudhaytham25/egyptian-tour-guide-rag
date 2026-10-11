@@ -4,7 +4,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import api from "../../services/api";
 import { logout } from "../../utils/logout";
-import { BACKGROUND_IMAGE_RULES, DEFAULT_BACKGROUND } from "./chatData";
+import {
+  BACKGROUND_IMAGE_RULES,
+  DEFAULT_BACKGROUND,
+  DEFAULT_DOCUMENT,
+} from "./chatData";
 import {
   STREAM_CHUNK_SIZE,
   STREAM_DELAY_MS,
@@ -36,6 +40,10 @@ const useChat = () => {
   // Non-404 conversation-list failures surface in the sidebar with a retry.
   const [conversationsError, setConversationsError] = useState(false);
   const [conversationsReloadKey, setConversationsReloadKey] = useState(0);
+  // Corpus picker: the uploaded documents list and which one the next
+  // /query should target. Session-level — not persisted per conversation.
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocument, setSelectedDocument] = useState(DEFAULT_DOCUMENT);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -165,6 +173,23 @@ const useChat = () => {
     setConversationsReloadKey((key) => key + 1);
   }, []);
 
+  // The document list behind the corpus picker — fetched once on mount and
+  // again whenever the picker is focused (a cheap GET), which covers docs
+  // uploaded/indexed on the Knowledge Base page since the chat was opened.
+  const refreshDocuments = useCallback(async () => {
+    if (!api.getUserId()) return; // no token — same guard as conversations
+    try {
+      const data = await api.getDocuments();
+      setDocuments(Array.isArray(data?.documents) ? data.documents : []);
+    } catch {
+      // Non-fatal — the picker keeps whatever it already shows.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDocuments();
+  }, [refreshDocuments]);
+
   // React to a logout in another tab. Same-tab logout already redirects, and
   // the axios response interceptor clears state on a 401.
   useEffect(() => {
@@ -259,8 +284,8 @@ const useChat = () => {
       const conversationId = await ensureActiveConversation(question);
 
       const requestData = conversationFeaturesAvailable
-        ? { query: question, conversationId }
-        : { query: question };
+        ? { query: question, conversationId, document: selectedDocument }
+        : { query: question, document: selectedDocument };
 
       const apiResponse = await api.askQuestion(requestData);
 
@@ -270,7 +295,12 @@ const useChat = () => {
 
       return apiResponse;
     },
-    [ensureActiveConversation, conversationFeaturesAvailable, refreshConversations]
+    [
+      ensureActiveConversation,
+      conversationFeaturesAvailable,
+      refreshConversations,
+      selectedDocument,
+    ]
   );
 
   // Load a conversation's messages when its sidebar item is clicked.
@@ -444,7 +474,10 @@ const useChat = () => {
         if (error.response?.status === 400 && conversationFeaturesAvailable) {
           setConversationFeaturesAvailable(false);
           try {
-            const retryResponse = await api.askQuestion({ query: trimmed });
+            const retryResponse = await api.askQuestion({
+              query: trimmed,
+              document: selectedDocument,
+            });
             if (seq !== sendSeqRef.current) return;
             simulateStreaming(extractAnswerText(retryResponse));
             return;
@@ -480,6 +513,7 @@ const useChat = () => {
       askWithConversation,
       simulateStreaming,
       conversationFeaturesAvailable,
+      selectedDocument,
     ]
   );
 
@@ -557,6 +591,8 @@ const useChat = () => {
     conversations,
     activeConversationId,
     conversationsError,
+    documents,
+    selectedDocument,
     isBusy: loading || streaming,
     // refs
     messagesEndRef,
@@ -570,6 +606,8 @@ const useChat = () => {
     handleNewChat,
     handleDeleteConversation,
     retryLoadConversations,
+    setSelectedDocument,
+    refreshDocuments,
   };
 };
 

@@ -42,10 +42,10 @@ const decodeTokenPayload = (token) => {
 };
 
 // Create axios instance with default config. The timeout is generous because
-// /query waits on the LLM (the backend itself allows up to ~2 minutes).
+// /query waits on the LLM (the backend itself allows up to ~5 minutes).
 const axiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 130000,
+  timeout: 320000,
   headers: {
     "Content-Type": "application/json",
   },
@@ -154,9 +154,12 @@ const api = {
     const formData = new FormData();
     formData.append("pdf", file);
 
-    // No manual Content-Type: axios sets multipart/form-data with the
-    // correct boundary itself when the body is FormData.
-    const response = await axiosInstance.post(`/upload`, formData);
+    // The instance default "Content-Type: application/json" must be cleared
+    // here — otherwise axios JSON-serializes the FormData (files become {})
+    // instead of letting the browser set multipart/form-data + boundary.
+    const response = await axiosInstance.post(`/upload`, formData, {
+      headers: { "Content-Type": undefined },
+    });
     return response.data;
   },
 
@@ -172,8 +175,10 @@ const api = {
   },
 
   // Query the RAG system. `request` is either a question string or a body
-  // object such as { query, conversationId } — both map to a single
-  // POST /query; the backend persists the exchange when conversationId is set.
+  // object such as { query, conversationId, document } — both map to a
+  // single POST /query; the backend persists the exchange when
+  // conversationId is set, and `document` picks the indexed corpus
+  // (default egyptian_history when omitted).
   askQuestion: async (request) => {
     const body = typeof request === "string" ? { query: request } : request;
     const response = await axiosInstance.post(`/query`, body);
