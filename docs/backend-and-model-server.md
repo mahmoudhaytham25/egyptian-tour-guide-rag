@@ -548,7 +548,6 @@ egyptian-tour-guide-rag/
 │   │   ├── embedding.py               # Embedding model wrapper
 │   │   └── llm.py                     # Gemini 3.8 Flash interface
 │   ├── rag/
-│   │   ├── classifier.py              # Prompt type classification
 │   │   ├── indexer.py                 # PDF chunking/indexing
 │   │   ├── retriever.py               # Semantic search
 │   │   ├── generator.py               # Response generation

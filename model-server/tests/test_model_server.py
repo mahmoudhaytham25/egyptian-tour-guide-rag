@@ -92,15 +92,16 @@ class FakeGenerator:
     returns a canned response dict or raises a canned error."""
     def __init__(self):
         self.calls = []
-        self.response = {"answer": "test answer", "sources": [], "is_conversational": False}
+        self.response = {"answer": "test answer", "sources": []}
         self.error = None
 
-    def generate_response(self, query, top_k=10, chat_history=None, retriever=None):
+    def generate_response(self, query, top_k=10, chat_history=None, retriever=None, deadline=None):
         self.calls.append({
             "query": query,
             "top_k": top_k,
             "chat_history": chat_history,
             "retriever": retriever,
+            "deadline": deadline,
         })
         if self.error is not None:
             raise self.error
@@ -383,3 +384,53 @@ class TestQuery:
     def test_top_k_out_of_range_rejected(self, client):
         resp = client.post("/query", json={"query": "q", "top_k": 99}, headers=AUTH)
         assert resp.status_code == 400
+
+    def test_timeout_ms_forwarded_as_monotonic_deadline(self, client):
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+        before = time.monotonic()
+        resp = client.post("/query", json={"query": "q", "timeout_ms": 5000},
+                           headers=AUTH)
+        after = time.monotonic()
+        assert resp.status_code == 200
+        deadline = client.fake_generator.calls[0]["deadline"]
+        assert before + 5 <= deadline <= after + 5
+
+    def test_no_timeout_ms_means_no_deadline(self, client):
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+        resp = client.post("/query", json={"query": "q"}, headers=AUTH)
+        assert resp.status_code == 200
+        assert client.fake_generator.calls[0]["deadline"] is None
+
+    def test_timeout_ms_invalid_rejected(self, client):
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+        for bad in (0, -5, "5000", True, 99999999):
+            resp = client.post(
+                "/query", json={"query": "q", "timeout_ms": bad}, headers=AUTH)
+            assert resp.status_code == 400, bad
+        assert client.fake_generator.calls == []
+
+    def test_deadline_exceeded_returns_504(self, client):
+        touch_vectors(client.vector_store_dir, "egyptian_history")
+        client.fake_generator.error = model_server.DeadlineExceeded(
+            "budget blown")
+        resp = client.post("/query", json={"query": "q"}, headers=AUTH)
+        assert resp.status_code == 504
+        body = resp.get_json()
+        assert body["success"] is False
+        assert "budget" in body["error"]
+
+    def test_generator_deadline_helpers(self):
+        # __new__ skips __init__ so no models are constructed — the helpers
+        # are pure deadline math.
+        g = model_server.Generator.__new__(model_server.Generator)
+        assert not g._over_deadline(None)
+        g._check_deadline(time.monotonic() + 60)  # future — no raise
+        with pytest.raises(model_server.DeadlineExceeded):
+            g._check_deadline(time.monotonic() - 1)
+
+    def test_schedule_keyword_route(self):
+        g = model_server.Generator.__new__(model_server.Generator)
+        assert g._is_schedule_query("Plan a Thursday itinerary in Luxor")
+        assert g._is_schedule_query("what's a good schedule for Cairo on Sunday?")
+        assert not g._is_schedule_query("When was the Great Pyramid built?")
+        assert not g._is_schedule_query("hello, how are you?")

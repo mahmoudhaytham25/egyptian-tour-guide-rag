@@ -1,5 +1,6 @@
 import os
 import hmac
+import time
 import uuid
 import logging
 import threading
@@ -8,7 +9,7 @@ from flask import Flask, request, jsonify
 from models.embedding import EmbeddingModel
 from models.llm import LLMModel
 from rag.retriever import Retriever
-from rag.generator import Generator
+from rag.generator import Generator, DeadlineExceeded
 from rag.indexer import PDFIndexer
 from rag.utils import get_data_dir, get_vector_store_dir
 from rag.utils.env_loader import load_environment, get_api_key
@@ -64,6 +65,10 @@ MAX_QUERY_LENGTH = 2000
 MIN_TOP_K = 1
 MAX_TOP_K = 20
 MAX_CHAT_HISTORY_ENTRIES = 20
+# Cap on the caller-supplied per-query time budget — stays comfortably
+# under gunicorn's 600s worker timeout so a budget can never outlive the
+# worker itself.
+MAX_TIMEOUT_MS = 540000
 
 
 @app.before_request
@@ -246,6 +251,20 @@ def query():
                 "error": f"unknown document '{safe_document}' — it has not been indexed"
             }), 404
 
+        # Cooperative cancellation: the backend may send its own remaining
+        # budget (timeout_ms) so this server stops issuing Gemini calls
+        # once an answer can't reach the client inside it anyway. Capped
+        # below gunicorn's 600s worker timeout.
+        deadline = None
+        timeout_ms = data.get('timeout_ms')
+        if timeout_ms is not None:
+            if (isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int)
+                    or not 0 < timeout_ms <= MAX_TIMEOUT_MS):
+                return jsonify({
+                    "error": f"timeout_ms must be an integer between 1 and {MAX_TIMEOUT_MS}"
+                }), 400
+            deadline = time.monotonic() + timeout_ms / 1000.0
+
         # Generate response with chat history against that document's
         # retriever
         response = generator.generate_response(
@@ -253,6 +272,7 @@ def query():
             top_k=top_k,
             chat_history=chat_history,
             retriever=get_retriever(safe_document),
+            deadline=deadline,
         )
 
         return jsonify({
@@ -260,6 +280,11 @@ def query():
             "query": query_text,
             "response": response
         })
+    except DeadlineExceeded as e:
+        # Budget blown between pipeline stages — a clean 504 (not a hang)
+        # lets the backend tell this apart from an upstream timeout.
+        logger.warning("Query aborted by caller time budget: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 504
     except Exception:
         # success:false + 5xx tells the backend NOT to persist an assistant
         # message — generation genuinely failed rather than producing a

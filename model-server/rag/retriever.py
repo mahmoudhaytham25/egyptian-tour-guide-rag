@@ -39,7 +39,7 @@ class Retriever:
     def __init__(self, pdf_name, times_name=None, top_k=10):
         """
         Initialize the retriever.
-        
+
         Args:
             pdf_name (str): Name of the PDF file (without extension)
             times_name (str): Name of the times/schedule data file (without extension)
@@ -51,7 +51,7 @@ class Retriever:
         self.embedding_model = EmbeddingModel()
         self.vector_store_dir = get_vector_store_dir()
         self.times_dir = get_times_dir()
-        
+
         self.vector_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_vectors.npz")
         self.metadata_file = os.path.join(self.vector_store_dir, f"{self.pdf_name}_metadata.json")
         self.times_file = os.path.join(self.times_dir, f"{self.times_name}.csv")
@@ -189,10 +189,10 @@ class Retriever:
                     "Time": row["Time"],
                     "City": city if city else self._extract_city(location)
                 })
-            
+
             logger.info(f"Found {len(results)} timing entries for city: {city}")
             return results
-        
+
         except Exception as e:
             logger.error(f"Error retrieving times data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -201,10 +201,10 @@ class Retriever:
     def _extract_city(self, location):
         """
         Helper method to extract city from location string.
-        
+
         Args:
             location (str): Location text
-            
+
         Returns:
             str: Extracted city name or empty string
         """

@@ -380,7 +380,7 @@ describe('POST /api/query', () => {
     expect(modelServer.post).not.toHaveBeenCalled(); // never reaches model server
   });
 
-  test('successful query → 200 with answer, model server called with 120s timeout', async () => {
+  test('successful query → 200 with answer, model server called with its time budget', async () => {
     modelServer.post.mockResolvedValue({
       data: {
         response: {
@@ -406,9 +406,12 @@ describe('POST /api/query', () => {
       expect.objectContaining({
         query: 'Where are the pyramids?',
         top_k: 5,
-        document: 'egyptian_history'
+        document: 'egyptian_history',
+        // Cooperative cancel — the model server stops issuing LLM calls
+        // once the answer can't arrive inside the backend's own window.
+        timeout_ms: 290000
       }),
-      expect.objectContaining({ timeout: 120000 })
+      expect.objectContaining({ timeout: 300000 })
     );
   });
 
@@ -472,6 +475,22 @@ describe('POST /api/query', () => {
 
     expect(res.status).toBe(504);
     expect(res.body.message).toMatch(/timed out/i);
+  });
+
+  test('model server 504 (time budget blown mid-pipeline) → 504, not 502', async () => {
+    modelServer.post.mockRejectedValue({
+      message: 'Request failed with status code 504',
+      response: { status: 504, data: { success: false, error: 'time budget exhausted before answer generation' } }
+    });
+
+    const res = await request(app)
+      .post('/api/query')
+      .set('Authorization', AUTH)
+      .send({ question: 'hi' });
+
+    expect(res.status).toBe(504);
+    expect(res.body.message).toBe('time budget exhausted before answer generation');
+    expect(Message.create).not.toHaveBeenCalled();
   });
 
   test('model server unreachable (no response) → 502', async () => {

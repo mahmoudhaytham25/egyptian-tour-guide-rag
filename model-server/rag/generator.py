@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import logging
 import json
 import argparse
@@ -10,18 +11,34 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.llm import LLMModel
 from rag.retriever import Retriever
-from rag.classifier import IntentClassifier
 from rag.utils import get_data_dir
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+class DeadlineExceeded(Exception):
+    """Raised between pipeline stages when the caller's time budget is
+    already blown — stops issuing further Gemini calls to produce an
+    answer the client could no longer receive anyway."""
+
+
+# Zero-cost stand-in for the removed LLM intent classifier: the
+# monument-schedule path only makes sense for itinerary-style asks, so a
+# marker phrase is enough — everything else takes the retrieval path.
+SCHEDULE_MARKERS = (
+    "schedule", "itinerary", "itineraries", "day plan", "trip plan",
+    "tour plan", "day trip", "one-day", "plan a trip", "plan my",
+    "plan our", "planning a trip", "plan a visit",
+)
+
+
 class Generator:
     def __init__(self, pdf_name=None, times_name=None):
         """
         Initialize the generator.
-        
+
         Args:
             pdf_name (str): Name of the PDF file (without extension)
             times_name (str): Name of the times/schedule data file (without extension)
@@ -30,35 +47,19 @@ class Generator:
         self.times_name = times_name or "monument_data"
         self.llm = LLMModel()
         self.retriever = Retriever(self.pdf_name, self.times_name)
-    
-    def classify_intent(self, query):
-        """
-        Classify the user query as conversational, information-seeking, or
-        schedule-seeking.
 
-        Delegates to rag.classifier.IntentClassifier — the tested
-        implementation — rather than duplicating the prompt/parsing logic.
-        The classifier is constructed per call because model_server swaps
-        self.llm with a shared instance after __init__.
+    def _is_schedule_query(self, query):
+        """Keyword route to the itinerary path — no LLM call needed."""
+        q = query.lower()
+        return any(marker in q for marker in SCHEDULE_MARKERS)
 
-        Args:
-            query (str): User query
-
-        Returns:
-            str: "conversational", "information-seeking", or "schedule-seeking".
-        """
-        result = IntentClassifier(llm=self.llm).classify(query)
-        intent = result["type"]
-        logger.info(f"Query classified as {intent}: {query}")
-        return intent
-    
     def get_schedule_parameters(self, query):
         """
         Extract filter parameters from schedule-seeking query.
         """
         parameter_prompt = f"""
         Extract the following parameters from the user's query about visiting Egyptian monuments or locations:
-        
+
         1. City: The Egyptian city mentioned in the query (e.g., Cairo, Alexandria, Luxor, Aswan, Giza). If the extracted city is not in Egypt, respond with not_in_egypt for city name.
         2. Day: The day of the week mentioned (e.g., Monday, Tuesday, etc.)
 
@@ -66,15 +67,15 @@ class Generator:
         1.If the extracted city is not in Egypt, respond with not_in_egypt for city name.
         2.If a city name is not found in the query, repsond with missing_city for city name.
 
-        
+
         User query: "{query}"
-        
+
         Format your response EXACTLY as follows with NO additional text:
         city=<extracted city>;day=<extracted day>
         """
-        
+
         response = self.llm.generate(parameter_prompt, max_tokens=1024).strip()
-        
+
         # Parse response
         try:
             params = {}
@@ -82,24 +83,24 @@ class Generator:
                 if "=" in pair:
                     key, value = pair.split("=", 1)
                     params[key.strip().lower()] = value.strip().lower()
-            
+
             # Validate required parameters
             if "city" not in params or not params["city"]:
                 return {"error": "missing_city"}
             if "day" not in params or not params["day"]:
                 params["day"] = "friday"  # Default to friday(weekend) if day is missing
-            
+
             if params["city"] == "not_in_egypt":
                 return{"error": "not_in_egypt"}
             if params["city"] == "missing_city":
                 return{"error": "missing_city"}
-            
+
             logger.info(f"Extracted parameters: {params}")
             return params
         except Exception as e:
             logger.error(f"Error parsing parameters: {str(e)}")
             return {"error": "invalid_format"}
-    
+
     def generate_schedule_response(self, query, max_tokens=1024, extracted_parameters=None, chat_history_str="", retriever=None):
         """
         Generate a schedule response for Egyptian monument visits.
@@ -119,7 +120,7 @@ class Generator:
             retriever = retriever or self.retriever
             # Step 1: Extract parameters from query
             parameters = extracted_parameters if extracted_parameters is not None else {"error": "invalid_format"}
-            
+
             # Step 2: Handle parameter errors
             if "error" in parameters:
                 if parameters["error"] == "missing_city":
@@ -137,7 +138,7 @@ class Generator:
                         "answer": "I apologize. I am only able to create schedules for cities in the country of Egypt.",
                         "query_type": "schedule-seeking",
                     }
-        
+
             # Step 3: Get relevant location data from the retriever
             results = retriever.getTimes(city=parameters["city"])
 
@@ -146,7 +147,7 @@ class Generator:
                     "answer": f"I don't have information about monuments or locations in {parameters['city']}. Could you try another Egyptian city?",
                     "query_type": "schedule-seeking"
                 }
-            
+
             # Step 4: Create an optimized schedule using extracted parameters and location data
             schedule_prompt = f"""
             Create a detailed one-day tour schedule for visiting monuments in {parameters['city']} on {parameters['day']}.
@@ -179,87 +180,29 @@ class Generator:
 
             User Query: {query}
             """
-            
+
             # Generate the schedule
             schedule_response = self.llm.generate(schedule_prompt, max_tokens= max_tokens)
             logger.info(f"Schedule response from LLM:\n{schedule_response}")
-            
+
             if not schedule_response or not schedule_response.strip():
                 return {
                     "answer": "I couldn't generate a schedule at this time. Please try again later.",
                     "query_type": "schedule-seeking"
                 }
-            
+
             return {
                 "answer": schedule_response,
                 "city": parameters["city"],
                 "day": parameters["day"],
                 "query_type": "schedule-seeking"
             }
-            
+
         except Exception as e:
             # Propagate — /query must return success:false instead of
             # persisting a generic apology as the assistant's message.
             logger.error(f"Error generating schedule: {str(e)}", exc_info=True)
             raise
-
-    def generate_conversational_response(self, query, conversation_history=None):
-        """
-        Generate a conversational response without document retrieval.
-        
-        Args:
-            query (str): User query
-            conversation_history (list): Previous conversation exchanges
-            
-        Returns:
-            dict: Response with answer
-        """
-        try:
-            # Format conversation history
-            formatted_history = ""
-            if conversation_history:
-                if not isinstance(conversation_history, list):
-                    raise ValueError("Conversation history must be a list of dictionaries.")
-                
-                formatted_history = "Previous conversation:\n"
-                for exchange in conversation_history:
-                    if not isinstance(exchange, dict):
-                        raise ValueError("Each conversation history item must be a dictionary.")
-                    
-                    role = exchange.get("role", "unknown").lower()
-                    content = exchange.get("content", "")
-                    if role == "user":
-                        formatted_history += f"Human: {content}\n"
-                    elif role == "assistant":
-                        formatted_history += f"Assistant: {content}\n"
-                    else:
-                        # Unknown role, just add content
-                        formatted_history += f"{content}\n"
-                formatted_history += "\n"
-            
-            # Create the prompt
-            prompt = f"""You are a friendly Egyptian history expert assistant. Respond conversationally to the following message.
-            Do not mention documents or searching for information, just respond naturally as in a conversation.
-
-            {formatted_history}
-            Human: {query}
-
-            Assistant:"""
-            
-            # Generate response
-            answer = self.llm.generate(prompt)
-            
-            return {
-                "answer": answer,
-                "sources": [],
-                "is_conversational": True
-            }
-        except Exception as e:
-            # Propagate — /query must return success:false instead of
-            # persisting a generic apology as the assistant's message.
-            logger.error(f"Error generating conversational response: {str(e)}", exc_info=True)
-            raise
-    
     def create_enhanced_prompt(self, query, retrieved_documents, chat_history_str=""):
         """
         Create an enhanced prompt template that includes chat history and retrieved documents.
@@ -292,7 +235,8 @@ class Generator:
 2. Do not mention sources, citations, or differentiate between document content and your own knowledge.
 3. Answer in a conversational, engaging tone suitable for a curious audience.
 4. If the information to answer the query is not available, say so clearly.
-5. Respond in the same language as the user's query by default. If the user specifies a specific language for response, follow their instruction as long as you are capable of using that language. 
+5. Respond in the same language as the user's query by default. If the user specifies a specific language for response, follow their instruction as long as you are capable of using that language.
+6. If the message is casual conversation or a greeting rather than a question, reply naturally and briefly — don't force document content into the answer.
 
 Respond with a comprehensive answer:
 """
@@ -300,7 +244,17 @@ Respond with a comprehensive answer:
         return prompt
 
     
-    def generate_response(self, query, top_k=10, chat_history=None, retriever=None):
+    def _over_deadline(self, deadline):
+        """True when the caller-supplied monotonic deadline has passed."""
+        return deadline is not None and time.monotonic() >= deadline
+
+    def _check_deadline(self, deadline):
+        """Hard stop before issuing another LLM call on a blown budget."""
+        if self._over_deadline(deadline):
+            raise DeadlineExceeded(
+                "time budget exhausted before answer generation")
+
+    def generate_response(self, query, top_k=10, chat_history=None, retriever=None, deadline=None):
         """
         Generate a response using the RAG pipeline with chat history and query enhancement.
 
@@ -312,15 +266,17 @@ Respond with a comprehensive answer:
                 per call (not stored on self) because gunicorn serves
                 concurrent queries for different documents on different
                 threads and a shared attribute would race.
+            deadline: Optional time.monotonic() deadline from the caller.
+                Once it passes, the optional enhance pass is skipped and a
+                DeadlineExceeded is raised before each further LLM call —
+                no point burning Gemini calls on an answer the client can
+                no longer receive.
 
         Returns:
             Generated response with sources
         """
         try:
             retriever = retriever or self.retriever
-
-            # Classify the query intent
-            intent = self.classify_intent(query)
 
             # Process chat history if provided
             formatted_history = ""
@@ -329,76 +285,73 @@ Respond with a comprehensive answer:
                 if not isinstance(chat_history, list):
                     logger.warning("Invalid chat history format. Expected a list of dictionaries.")
                     chat_history = []  # Default to an empty list
-                
+
                 # Apply window selection to get most relevant messages
                 selected_history = self.window_selection(chat_history)
                 # Format the selected history into a string
                 formatted_history = self.history_handler(selected_history)
                 logger.info(f"Processed {len(selected_history)} messages from chat history")
-            
-            # Generate appropriate response based on intent
-            if intent == "schedule-seeking":
-                original_query = query
-                # Enhance FIRST, then extract parameters — mirroring the
-                # information-seeking branch. Extracting from the raw query
-                # misses context established earlier in the conversation
-                # ("plan a trip there on Friday" loses the city).
-                if chat_history and len(selected_history) > 0:
-                    query = self.enhance_query_with_context(original_query, selected_history, self.llm)
-                    logger.info(f"Enhanced query: '{original_query}' → '{query}'")
+
+            # Enhance query with context if we have chat history — the
+            # optional pass is skipped on a blown budget so the raw
+            # query can still retrieve and answer inside it.
+            original_query = query
+            if chat_history and len(selected_history) > 0 and not self._over_deadline(deadline):
+                query = self.enhance_query_with_context(original_query, selected_history, self.llm)
+                logger.info(f"Enhanced query: '{original_query}' → '{query}'")
+
+            # Itinerary-style asks take the schedule path (keyword route —
+            # the old LLM intent classifier cost a full Gemini call just to
+            # pick a branch).
+            if self._is_schedule_query(query):
+                self._check_deadline(deadline)
                 params = self.get_schedule_parameters(query)
+                self._check_deadline(deadline)
 
                 return self.generate_schedule_response(query, extracted_parameters = params, chat_history_str = formatted_history, retriever = retriever)
-            elif intent == "conversational":
-                return self.generate_conversational_response(query, selected_history)
-            else:
-                # Enhance query with context if we have chat history
-                original_query = query
-                if chat_history and len(selected_history) > 0:
-                    query = self.enhance_query_with_context(original_query, selected_history, self.llm)
-                    logger.info(f"Enhanced query: '{original_query}' → '{query}'")
-                
-                # Use enhanced query for retrieval
-                search_results = retriever.search(query, top_k=top_k)
-                
-                # Convert search results to expected format
-                retrieved_documents = []
-                for result in search_results:
-                    chunk = result["chunk"]
-                    retrieved_documents.append({
-                        "text": chunk.get("text", ""),
-                        "metadata": {
-                            "page": chunk.get("page_num", "Unknown"),
-                            "source": retriever.pdf_name
-                        }
-                    })
-                
-                # Create enhanced prompt with chat history and retrieved documents
-                enhanced_prompt = self.create_enhanced_prompt(
-                    query=query,
-                    retrieved_documents=retrieved_documents,
-                    chat_history_str=formatted_history
-                )
-                
-                # Generate response using the enhanced prompt
-                answer = self.llm.generate(enhanced_prompt)
-                
-                # Extract sources from retrieved documents for citation
-                sources = [
-                    {
-                        "page": doc["metadata"]["page"],
-                        "text": doc["text"][:100] + "..." if len(doc["text"]) > 100 else doc["text"]
+
+            # Use enhanced query for retrieval
+            search_results = retriever.search(query, top_k=top_k)
+
+            # Convert search results to expected format
+            retrieved_documents = []
+            for result in search_results:
+                chunk = result["chunk"]
+                retrieved_documents.append({
+                    "text": chunk.get("text", ""),
+                    "metadata": {
+                        "page": chunk.get("page_num", "Unknown"),
+                        "source": retriever.pdf_name
                     }
-                    for doc in retrieved_documents
-                ]
-                
-                return {
-                    "answer": answer,
-                    "sources": sources,
-                    "is_conversational": False,
-                    "original_query": original_query if query != original_query else None,
-                    "enhanced_query": query if query != original_query else None
+                })
+
+            # Create enhanced prompt with chat history and retrieved documents
+            enhanced_prompt = self.create_enhanced_prompt(
+                query=query,
+                retrieved_documents=retrieved_documents,
+                chat_history_str=formatted_history
+            )
+
+            # Generate response using the enhanced prompt — last hard
+            # deadline check before the expensive call.
+            self._check_deadline(deadline)
+            answer = self.llm.generate(enhanced_prompt)
+
+            # Extract sources from retrieved documents for citation
+            sources = [
+                {
+                    "page": doc["metadata"]["page"],
+                    "text": doc["text"][:100] + "..." if len(doc["text"]) > 100 else doc["text"]
                 }
+                for doc in retrieved_documents
+            ]
+
+            return {
+                "answer": answer,
+                "sources": sources,
+                "original_query": original_query if query != original_query else None,
+                "enhanced_query": query if query != original_query else None
+            }
         except Exception as e:
             # Propagate — /query must return success:false instead of
             # persisting a generic apology as the assistant's message.
@@ -576,13 +529,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate a response to a query using RAG")
     parser.add_argument("query", help="User query")
     parser.add_argument("--pdf-name", help="Name of the PDF file (without extension)")
-    parser.add_argument("--times-name", help="Name of the file containing the time database (without extension)")
     parser.add_argument("--top-k", type=int, default=5, help="Number of top results to retrieve")
     parser.add_argument("--conversation-history", help="JSON string of conversation history")
     
     args = parser.parse_args()
     
-    generator = Generator(pdf_name=args.pdf_name, times_name=args.times_name)
+    generator = Generator(pdf_name=args.pdf_name)
     
     # Parse conversation history if provided
     conversation_history = None

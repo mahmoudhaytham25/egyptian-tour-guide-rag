@@ -8,7 +8,15 @@ const modelServer = require('../config/modelServer');
 const { HttpError } = require('../middleware/errors');
 const { DATA_DIR, VECTOR_STORE_DIR } = require('../config/paths');
 
-const QUERY_TIMEOUT_MS = 120000; // LLM calls can be slow — 2 min, never hang
+// The /query pipeline makes up to three serial Gemini calls (classify →
+// enhance → generate), which on a slow key observed ~150s — so a 2-minute
+// cap 504s requests that would succeed a moment later. 5 minutes, never
+// hang (gunicorn allows 600s; the frontend axios timeout is just above).
+const QUERY_TIMEOUT_MS = 300000;
+// Shared with the model server as its own time budget — once an answer
+// can't possibly arrive inside this window, it stops issuing further
+// LLM calls instead of burning quota to completion.
+const MODEL_SERVER_BUDGET_MS = QUERY_TIMEOUT_MS - 10000;
 // POST /index on the model server returns 202 immediately (indexing runs
 // async there), so a short timeout is enough — it only bounds the handshake.
 const INDEX_TIMEOUT_MS = 10000;
@@ -272,7 +280,13 @@ exports.queryRag = async (req, res) => {
   try {
     const modelResponse = await modelServer.post(
       '/query',
-      { query: queryText, top_k: 5, document: documentName, chat_history: chatHistory },
+      {
+        query: queryText,
+        top_k: 5,
+        document: documentName,
+        chat_history: chatHistory,
+        timeout_ms: MODEL_SERVER_BUDGET_MS
+      },
       { timeout: QUERY_TIMEOUT_MS }
     );
     rawData = modelResponse.data;
@@ -291,7 +305,10 @@ exports.queryRag = async (req, res) => {
     // Model server responded with an error status — surface its error
     // message when it's a plain string field, never the raw body.
     const detail = error.response.data && error.response.data.error;
-    throw new HttpError(502, detail || 'Error generating response from model server');
+    // A 504 means it hit the cooperative time budget mid-pipeline —
+    // preserve the status rather than re-labeling it a bad gateway.
+    const status = error.response.status === 504 ? 504 : 502;
+    throw new HttpError(status, detail || 'Error generating response from model server');
   }
 
   // Generation failed upstream — return the error without persisting an
