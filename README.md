@@ -1,6 +1,19 @@
 # Egyptian Tour Guide — Agentic RAG Chatbot
 
 [![CI](https://github.com/mahmoudhaytham25/egyptian-tour-guide-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/mahmoudhaytham25/egyptian-tour-guide-rag/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Node 24](https://img.shields.io/badge/node-24-339933?logo=nodedotjs&logoColor=white)
+![Python 3](https://img.shields.io/badge/python-3-3776ab?logo=python&logoColor=white)
+
+![React 19](https://img.shields.io/badge/react-19-61dafb?logo=react&logoColor=black)
+![Vite 8](https://img.shields.io/badge/vite-8-646cff?logo=vite&logoColor=white)
+![Express 5](https://img.shields.io/badge/express-5-000000?logo=express&logoColor=white)
+![Flask 3](https://img.shields.io/badge/flask-3-000000?logo=flask&logoColor=white)
+![Gemini](https://img.shields.io/badge/llm-gemini-8e75c2?logo=googlegemini&logoColor=white)
+![MongoDB 7](https://img.shields.io/badge/mongodb-7-47a248?logo=mongodb&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/docker-compose-2496ed?logo=docker&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-vitest%20%C2%B7%20playwright%20%C2%B7%20pytest-2ea44f)
+![AWS CDK](https://img.shields.io/badge/iac-aws%20cdk-ff9900?logo=amazonwebservices&logoColor=white)
 
 A full-stack agentic chatbot for Egyptian tourism. It answers questions grounded in uploaded Egyptian history documents via a Retrieval-Augmented Generation (RAG) pipeline, holds natural multi-turn conversations, and can plan trip schedules (e.g. "a Thursday itinerary in Luxor").
 
