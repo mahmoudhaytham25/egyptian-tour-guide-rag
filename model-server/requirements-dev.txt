@@ -4,5 +4,5 @@
 # python-dotenv is already in requirements.txt but pinned here too so the
 # test suite works even if only this file is installed (env_loader.py
 # imports it at module level).
-pytest>=8.0
+pytest>=9.1.1
 python-dotenv>=1.2.4
