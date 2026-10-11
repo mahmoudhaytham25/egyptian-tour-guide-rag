@@ -9,9 +9,8 @@ const conversationSchema = new mongoose.Schema({
 });
 
 // Update the updatedAt field on save
-conversationSchema.pre('save', function(next) {
+conversationSchema.pre('save', function() {
   this.updatedAt = Date.now();
-  next();
 });
 
 module.exports = mongoose.model('Conversation', conversationSchema);
