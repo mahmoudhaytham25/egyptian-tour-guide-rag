@@ -94,6 +94,17 @@ npm run migrate:create -- my-change   # scaffold a new migration
 
 **Full setup, env vars, and API reference:** [`docs/backend-and-model-server.md`](docs/backend-and-model-server.md) · **Frontend details:** [`frontend/README.md`](frontend/README.md)
 
+## Testing
+
+```bash
+cd backend && npm test                                        # jest (Express app, in-process)
+cd model-server && python -m pytest                           # pytest (needs -r requirements-dev.txt)
+cd frontend && npm test                                       # vitest + Testing Library
+cd frontend && npm run test:e2e                               # playwright e2e (needs a build + running backend)
+```
+
+CI additionally runs a full `docker compose` smoke stack on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
 ## Deployment — AWS (CDK)
 
 `infrastructure/` contains a complete IaC setup for running the app on AWS: one EC2 instance pulling pre-built images from ECR, deployed by a path-filtered CodeBuild pipeline. Four CDK stacks (`ecr`, `compute`, `deploy`, `ci`) are wired from `bin/app.ts`.
