@@ -4,7 +4,7 @@ gunicorn>=26.2.0
 python-dotenv>=1.2.4
 # Unified Gemini SDK (replaces the deprecated google-generativeai);
 # per-request timeouts go through types.HttpOptions in milliseconds
-google-genai>=2.29.0
+google-genai>=2.32.0
 numpy>=2.5.4
 tqdm>=4.70.1
 PyMuPDF>=1.28.2
