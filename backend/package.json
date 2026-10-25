@@ -30,7 +30,7 @@
         "helmet": "^8.1.0",
         "jsonwebtoken": "^9.0.3",
         "migrate-mongo": "^14.0.7",
-        "mongoose": "^9.11.1",
+        "mongoose": "^9.11.3",
         "multer": "^2.0.2"
     },
     "devDependencies": {
