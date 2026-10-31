@@ -7,4 +7,4 @@ python-dotenv>=1.2.4
 google-genai>=2.29.0
 numpy>=2.5.4
 tqdm>=4.70.1
-PyMuPDF>=1.28.2
+PyMuPDF>=2.0
